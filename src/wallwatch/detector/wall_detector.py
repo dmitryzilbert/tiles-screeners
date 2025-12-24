@@ -1,0 +1,304 @@
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from statistics import median
+from typing import Iterable
+
+from wallwatch.state.models import (
+    ActiveWall,
+    Alert,
+    InstrumentState,
+    OrderBookLevel,
+    OrderBookSnapshot,
+    Side,
+    Trade,
+    WallCandidate,
+)
+
+
+@dataclass(frozen=True)
+class DetectorConfig:
+    max_symbols: int = 10
+    depth: int = 20
+    distance_ticks: int = 10
+    k_ratio: float = 10.0
+    abs_qty_threshold: float = 0.0
+    dwell_seconds: float = 30.0
+    reposition_window_seconds: float = 3.0
+    reposition_ticks: int = 1
+    reposition_similar_pct: float = 0.2
+    reposition_max: int = 1
+    trades_window_seconds: float = 20.0
+    Emin: float = 200.0
+    Amin: float = 0.2
+    cancel_share_max: float = 0.7
+    consuming_drop_pct: float = 0.2
+    consuming_window_seconds: float = 8.0
+    min_exec_confirm: float = 50.0
+    cooldown_confirmed_seconds: float = 120.0
+    cooldown_consuming_seconds: float = 45.0
+    vref_levels: int = 10
+
+
+class WallDetector:
+    def __init__(self, config: DetectorConfig) -> None:
+        self._config = config
+        self._states: dict[str, InstrumentState] = {}
+
+    def upsert_instrument(self, instrument_id: str, tick_size: float, symbol: str) -> None:
+        if instrument_id in self._states:
+            return
+        self._states[instrument_id] = InstrumentState(
+            instrument_id=instrument_id, tick_size=tick_size, symbol=symbol
+        )
+
+    def on_trade(self, trade: Trade) -> list[Alert]:
+        state = self._states.get(trade.instrument_id)
+        if state is None:
+            return []
+        state.trades.append(trade)
+        self._cleanup_trades(state, trade.ts)
+        return []
+
+    def on_order_book(self, snapshot: OrderBookSnapshot) -> list[Alert]:
+        state = self._states.get(snapshot.instrument_id)
+        if state is None:
+            return []
+        state.last_snapshot = snapshot
+        self._cleanup_trades(state, snapshot.ts)
+        alerts: list[Alert] = []
+        candidate = self._find_candidate(snapshot, state.tick_size)
+        if candidate is None:
+            return alerts
+
+        wall = self._update_active_wall(state, candidate, snapshot.ts)
+        previous_size = wall.last_size
+        wall.size_history.append((snapshot.ts, candidate.size))
+        wall.last_size = candidate.size
+        wall.last_seen = snapshot.ts
+
+        dwell_seconds = (snapshot.ts - wall.first_seen).total_seconds()
+        executed_at_wall = self._executed_volume_at_price(state, candidate.price)
+        size_drop = max(previous_size - candidate.size, 0.0)
+        cancel_share = self._cancel_share(executed_at_wall, size_drop)
+        absorption_score = executed_at_wall / max(candidate.size, 1e-9)
+
+        if self._should_confirm(
+            wall,
+            dwell_seconds,
+            executed_at_wall,
+            cancel_share,
+            absorption_score,
+            size_drop,
+            snapshot.ts,
+        ):
+            alert = self._build_alert(
+                snapshot,
+                candidate,
+                "ALERT_WALL_CONFIRMED",
+                dwell_seconds,
+                executed_at_wall,
+                cancel_share,
+                [
+                    f"dwell>={self._config.dwell_seconds}",
+                    f"ratio>={self._config.k_ratio} or abs>={self._config.abs_qty_threshold}",
+                ],
+            )
+            wall.confirmed_ts = snapshot.ts
+            wall.last_confirm_alert_ts = snapshot.ts
+            alerts.append(alert)
+
+        if self._should_consuming(wall, snapshot.ts, executed_at_wall, cancel_share):
+            reasons = [
+                f"drop>={self._config.consuming_drop_pct:.2f}",
+                f"exec>={self._config.min_exec_confirm}",
+            ]
+            alert = self._build_alert(
+                snapshot,
+                candidate,
+                "ALERT_WALL_CONSUMING",
+                dwell_seconds,
+                executed_at_wall,
+                cancel_share,
+                reasons,
+            )
+            wall.last_consuming_alert_ts = snapshot.ts
+            alerts.append(alert)
+        return alerts
+
+    def _find_candidate(
+        self, snapshot: OrderBookSnapshot, tick_size: float
+    ) -> WallCandidate | None:
+        candidates: list[WallCandidate] = []
+        if snapshot.best_bid is not None:
+            candidates += self._find_side_candidate(
+                Side.BUY, snapshot.bids, snapshot.best_bid, tick_size
+            )
+        if snapshot.best_ask is not None:
+            candidates += self._find_side_candidate(
+                Side.SELL, snapshot.asks, snapshot.best_ask, tick_size
+            )
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item.ratio)
+
+    def _find_side_candidate(
+        self,
+        side: Side,
+        levels: list[OrderBookLevel],
+        best_price: float,
+        tick_size: float,
+    ) -> list[WallCandidate]:
+        if not levels:
+            return []
+        top_levels = levels[: self._config.vref_levels]
+        v_ref = self._median_volume(top_levels)
+        candidates: list[WallCandidate] = []
+        for level in levels:
+            dist_ticks = int(round(abs(level.price - best_price) / tick_size))
+            if dist_ticks == 0 or dist_ticks > self._config.distance_ticks:
+                continue
+            ratio = level.quantity / max(v_ref, 1e-9)
+            if ratio >= self._config.k_ratio or level.quantity >= self._config.abs_qty_threshold:
+                candidates.append(
+                    WallCandidate(
+                        side=side,
+                        price=level.price,
+                        size=level.quantity,
+                        ratio=ratio,
+                        v_ref=v_ref,
+                        distance_ticks=dist_ticks,
+                    )
+                )
+        return candidates
+
+    def _median_volume(self, levels: Iterable[OrderBookLevel]) -> float:
+        values = [level.quantity for level in levels if level.quantity > 0]
+        if not values:
+            return 0.0
+        return float(median(values))
+
+    def _update_active_wall(
+        self, state: InstrumentState, candidate: WallCandidate, ts: datetime
+    ) -> ActiveWall:
+        wall = state.active_wall
+        if wall and wall.side == candidate.side and wall.price == candidate.price:
+            return wall
+        reposition_count = 0
+        if wall is not None:
+            within_window = (ts - wall.last_seen).total_seconds() <= self._config.reposition_window_seconds
+            if within_window:
+                price_delta = abs(candidate.price - wall.price)
+                max_delta = self._config.reposition_ticks * state.tick_size
+                size_similarity = abs(candidate.size - wall.last_size) / max(wall.last_size, 1e-9)
+                if price_delta <= max_delta and size_similarity <= self._config.reposition_similar_pct:
+                    reposition_count = wall.reposition_count + 1
+        new_wall = ActiveWall(
+            side=candidate.side,
+            price=candidate.price,
+            first_seen=ts,
+            last_seen=ts,
+            last_size=candidate.size,
+            reposition_count=reposition_count,
+        )
+        state.active_wall = new_wall
+        return new_wall
+
+    def _cleanup_trades(self, state: InstrumentState, ts: datetime) -> None:
+        window = timedelta(seconds=self._config.trades_window_seconds)
+        while state.trades and (ts - state.trades[0].ts) > window:
+            state.trades.popleft()
+
+    def _executed_volume_at_price(self, state: InstrumentState, price: float) -> float:
+        return sum(trade.quantity for trade in state.trades if trade.price == price)
+
+    def _cancel_share(self, executed_at_wall: float, size_drop: float) -> float:
+        if size_drop <= 0:
+            return 0.0
+        return 1.0 - min(executed_at_wall, size_drop) / max(size_drop, 1e-9)
+
+    def _should_confirm(
+        self,
+        wall: ActiveWall,
+        dwell_seconds: float,
+        executed_at_wall: float,
+        cancel_share: float,
+        absorption_score: float,
+        size_drop: float,
+        ts: datetime,
+    ) -> bool:
+        if wall.reposition_count > self._config.reposition_max:
+            return False
+        if dwell_seconds < self._config.dwell_seconds:
+            return False
+        has_cancel_signal = size_drop > 0 and cancel_share <= self._config.cancel_share_max
+        if not (
+            executed_at_wall >= self._config.Emin
+            or has_cancel_signal
+            or absorption_score >= self._config.Amin
+        ):
+            return False
+        if wall.last_confirm_alert_ts is None:
+            return True
+        cooldown = timedelta(seconds=self._config.cooldown_confirmed_seconds)
+        return (ts - wall.last_confirm_alert_ts) >= cooldown
+
+    def _should_consuming(
+        self,
+        wall: ActiveWall,
+        ts: datetime,
+        executed_at_wall: float,
+        cancel_share: float,
+    ) -> bool:
+        if wall.confirmed_ts is None:
+            return False
+        if executed_at_wall < self._config.min_exec_confirm and cancel_share > self._config.cancel_share_max:
+            return False
+        drop_pct = self._consuming_drop_pct(wall, ts)
+        if drop_pct < self._config.consuming_drop_pct:
+            return False
+        if wall.last_consuming_alert_ts is None:
+            return True
+        cooldown = timedelta(seconds=self._config.cooldown_consuming_seconds)
+        return (ts - wall.last_consuming_alert_ts) >= cooldown
+
+    def _consuming_drop_pct(self, wall: ActiveWall, ts: datetime) -> float:
+        if not wall.size_history:
+            return 0.0
+        window = timedelta(seconds=self._config.consuming_window_seconds)
+        baseline = None
+        for point_ts, size in wall.size_history:
+            if (ts - point_ts) <= window:
+                baseline = size
+                break
+        if baseline is None or baseline <= 0:
+            return 0.0
+        return max((baseline - wall.last_size) / baseline, 0.0)
+
+    def _build_alert(
+        self,
+        snapshot: OrderBookSnapshot,
+        candidate: WallCandidate,
+        event: str,
+        dwell_seconds: float,
+        executed_at_wall: float,
+        cancel_share: float,
+        reasons: list[str],
+    ) -> Alert:
+        return Alert(
+            instrument_id=snapshot.instrument_id,
+            side=candidate.side,
+            price=candidate.price,
+            event=event,
+            size=candidate.size,
+            ratio=candidate.ratio,
+            v_ref=candidate.v_ref,
+            distance_ticks=candidate.distance_ticks,
+            dwell_seconds=dwell_seconds,
+            executed_at_wall=executed_at_wall,
+            cancel_share=cancel_share,
+            reasons=reasons,
+            ts=snapshot.ts,
+        )
