@@ -64,12 +64,37 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+DEFAULT_DOCTOR_SYMBOLS = ["SBER"]
+
+
 def _parse_symbols(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _build_run_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Order book wall monitor")
+    parser.add_argument("--symbols", required=True, help="Comma separated symbols/ISINs")
+    parser.add_argument("--depth", type=int, default=None)
+    parser.add_argument("--config", type=Path, default=None)
+    return parser
+
+
+def _build_doctor_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="WallWatch preflight checks")
+    parser.add_argument(
+        "--symbols",
+        required=False,
+        help="Optional comma separated symbols/ISINs (default: SBER)",
+    )
+    parser.add_argument("--config", type=Path, default=None)
+    return parser
+
+
 async def run_async(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
+    if argv[:1] == ["run"]:
+        await run_monitor_async(argv[1:])
+        return
     if argv[:1] == ["doctor"]:
         await run_doctor_async(argv[1:])
         return
@@ -82,10 +107,7 @@ async def run_async(argv: list[str] | None = None) -> None:
 
 
 async def run_monitor_async(argv: list[str]) -> None:
-    parser = argparse.ArgumentParser(description="Order book wall monitor")
-    parser.add_argument("--symbols", required=True, help="Comma separated symbols/ISINs")
-    parser.add_argument("--depth", type=int, default=None)
-    parser.add_argument("--config", type=Path, default=None)
+    parser = _build_run_parser()
     args = parser.parse_args(argv)
 
     try:
@@ -163,12 +185,10 @@ async def run_monitor_async(argv: list[str]) -> None:
 
 
 async def run_doctor_async(argv: list[str]) -> None:
-    parser = argparse.ArgumentParser(description="WallWatch preflight checks")
-    parser.add_argument("--symbols", required=True, help="Comma separated symbols/ISINs")
-    parser.add_argument("--config", type=Path, default=None)
+    parser = _build_doctor_parser()
     args = parser.parse_args(argv)
-
-    report, fatal = await build_doctor_report(_parse_symbols(args.symbols), args.config)
+    symbols = _parse_symbols(args.symbols) if args.symbols else DEFAULT_DOCTOR_SYMBOLS
+    report, fatal = await build_doctor_report(symbols, args.config)
     _print_report(report)
     if fatal:
         raise SystemExit(1)
@@ -217,6 +237,7 @@ async def build_doctor_report(
             fatal = True
 
     if not fatal and settings is not None:
+        grpc_symbols = symbols or DEFAULT_DOCTOR_SYMBOLS
         client = MarketDataClient(
             token=settings.token or "",
             logger=logger,
@@ -224,7 +245,7 @@ async def build_doctor_report(
             stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
         )
         try:
-            resolved, failures = await client.resolve_instruments(symbols)
+            resolved, failures = await client.resolve_instruments(grpc_symbols)
         except Exception as exc:  # noqa: BLE001
             report.append(("grpc", False, f"gRPC request failed: {exc}"))
             fatal = True

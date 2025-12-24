@@ -16,7 +16,7 @@ pip install -e .
 cp .env.example .env
 # edit .env
 export tinvest_token="..."
-wallwatch --symbols SBER,GAZP --depth 20 --config config.yaml
+wallwatch run --symbols SBER,GAZP --depth 20 --config config.yaml
 ```
 
 Token is read from `tinvest_token` (or legacy `invest_token`). Uppercase variants are deprecated but still supported.
@@ -92,10 +92,12 @@ pytest
 ## Preflight checks
 
 ```bash
+wallwatch doctor
 wallwatch doctor --symbols SBER,GAZP
 ```
 
-Doctor validates required environment variables, CA bundle configuration, and resolves instruments.
+Doctor validates required environment variables, CA bundle configuration, and resolves instruments. In normal mode the
+`--symbols` flag is required, while in doctor mode symbols are optional.
 
 ## Telegram interface
 
@@ -106,7 +108,7 @@ Examples:
 pip install -e ".[telegram]"
 
 # CLI monitoring only
-wallwatch --symbols SBER,GAZP --depth 20 --config config.yaml
+wallwatch run --symbols SBER,GAZP --depth 20 --config config.yaml
 
 # Telegram interface (commands + monitoring)
 wallwatch telegram --symbols SBER,GAZP --config config.yaml
