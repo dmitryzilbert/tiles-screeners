@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator, Callable, Iterable
 
+import grpc
+import t_tech.invest as tinvest
 from t_tech.invest import AsyncClient, MarketDataRequest, SubscriptionAction
 from t_tech.invest.services import InstrumentsService
 from t_tech.invest.utils import quotation_to_decimal
@@ -39,14 +43,22 @@ def _timestamp_to_datetime(value) -> datetime:
 
 
 class MarketDataClient:
-    def __init__(self, token: str, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        token: str,
+        logger: logging.Logger,
+        root_certificates: bytes | None = None,
+        stream_idle_sleep_seconds: float = 3600.0,
+    ) -> None:
         self._token = token
         self._logger = logger
+        self._root_certificates = root_certificates
+        self._stream_idle_sleep_seconds = stream_idle_sleep_seconds
 
     async def resolve_instruments(self, symbols: Iterable[str]) -> tuple[list[InstrumentInfo], list[str]]:
         resolved: list[InstrumentInfo] = []
         failures: list[str] = []
-        async with AsyncClient(self._token) as client:
+        async with self._client() as client:
             service = client.instruments
             for symbol in symbols:
                 try:
@@ -84,7 +96,7 @@ class MarketDataClient:
         on_alerts: Callable[[list], None],
         stop_event: asyncio.Event,
     ) -> None:
-        async with AsyncClient(self._token) as client:
+        async with self._client() as client:
             async for response in client.market_data_stream.market_data_stream(
                 self._subscription_requests(instruments, depth)
             ):
@@ -126,7 +138,7 @@ class MarketDataClient:
                 )
             )
             while True:
-                await asyncio.sleep(3600)
+                await asyncio.sleep(self._stream_idle_sleep_seconds)
 
         return _iter()
 
@@ -165,3 +177,48 @@ class MarketDataClient:
             side=side,
             ts=_timestamp_to_datetime(trade.time),
         )
+
+    @asynccontextmanager
+    async def _client(self) -> AsyncIterator[AsyncClient]:
+        kwargs, channel = self._client_kwargs()
+        async with AsyncClient(self._token, **kwargs) as client:
+            yield client
+        if channel is not None:
+            await channel.close()
+
+    def _client_kwargs(self) -> tuple[dict[str, object], grpc.aio.Channel | None]:
+        if self._root_certificates is None:
+            return {}, None
+        credentials = grpc.ssl_channel_credentials(root_certificates=self._root_certificates)
+        params = inspect.signature(AsyncClient).parameters
+        if "root_certificates" in params:
+            return {"root_certificates": self._root_certificates}, None
+        if "ssl_credentials" in params:
+            return {"ssl_credentials": credentials}, None
+        if "credentials" in params:
+            return {"credentials": credentials}, None
+        if "channel" in params:
+            endpoint = _resolve_grpc_endpoint()
+            if endpoint is None:
+                raise RuntimeError(
+                    "Unable to determine gRPC endpoint for custom CA bundle. "
+                    "Update the client library or use system CA."
+                )
+            channel = grpc.aio.secure_channel(endpoint, credentials)
+            return {"channel": channel}, channel
+        raise RuntimeError("AsyncClient does not support custom gRPC root certificates.")
+
+
+def _resolve_grpc_endpoint() -> str | None:
+    for name in (
+        "API_URL",
+        "API_ENDPOINT",
+        "DEFAULT_API_URL",
+        "DEFAULT_ENDPOINT",
+        "DEFAULT_HOST",
+        "DEFAULT_GRPC_ENDPOINT",
+    ):
+        value = getattr(tinvest, name, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
