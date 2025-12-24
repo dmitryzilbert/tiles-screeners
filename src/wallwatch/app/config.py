@@ -37,43 +37,17 @@ class EnvSettings:
 
 
 def load_env_settings() -> EnvSettings:
-    logger = logging.getLogger("wallwatch")
-    used_uppercase: list[str] = []
-
-    token, warnings = _get_env_value("tinvest_token", legacy_names=["invest_token"])
-    used_uppercase.extend(warnings)
-    ca_bundle_path, warnings = _get_env_value("tinvest_ca_bundle_path")
-    used_uppercase.extend(warnings)
-    ca_bundle_b64, warnings = _get_env_value("tinvest_ca_bundle_b64")
-    used_uppercase.extend(warnings)
-    retry_backoff_initial_seconds, warnings = _parse_float_env(
-        "wallwatch_retry_backoff_initial_seconds", 1.0
-    )
-    used_uppercase.extend(warnings)
-    retry_backoff_max_seconds, warnings = _parse_float_env(
-        "wallwatch_retry_backoff_max_seconds", 30.0
-    )
-    used_uppercase.extend(warnings)
-    stream_idle_sleep_seconds, warnings = _parse_float_env(
-        "wallwatch_stream_idle_sleep_seconds", 3600.0
-    )
-    used_uppercase.extend(warnings)
-    tg_bot_token, warnings = _get_env_value("tg_bot_token")
-    used_uppercase.extend(warnings)
-    tg_chat_ids, warnings = _parse_int_list_env("tg_chat_id")
-    used_uppercase.extend(warnings)
-    tg_allowed_user_ids, warnings = _parse_int_list_env("tg_allowed_user_ids")
-    used_uppercase.extend(warnings)
-    tg_polling, warnings = _parse_bool_env("tg_polling", True)
-    used_uppercase.extend(warnings)
-    tg_parse_mode, warnings = _parse_parse_mode_env("tg_parse_mode", "HTML")
-    used_uppercase.extend(warnings)
-
-    if used_uppercase:
-        logger.warning(
-            "deprecated_uppercase_env",
-            extra={"variables": sorted(set(used_uppercase))},
-        )
+    token = _get_env_value("tinvest_token", legacy_names=["invest_token"])
+    ca_bundle_path = _get_env_value("tinvest_ca_bundle_path")
+    ca_bundle_b64 = _get_env_value("tinvest_ca_bundle_b64")
+    retry_backoff_initial_seconds = _parse_float_env("wallwatch_retry_backoff_initial_seconds", 1.0)
+    retry_backoff_max_seconds = _parse_float_env("wallwatch_retry_backoff_max_seconds", 30.0)
+    stream_idle_sleep_seconds = _parse_float_env("wallwatch_stream_idle_sleep_seconds", 3600.0)
+    tg_bot_token = _get_env_value("tg_bot_token")
+    tg_chat_ids = _parse_int_list_env("tg_chat_id")
+    tg_allowed_user_ids = _parse_int_list_env("tg_allowed_user_ids")
+    tg_polling = _parse_bool_env("tg_polling", True)
+    tg_parse_mode = _parse_parse_mode_env("tg_parse_mode", "HTML")
     return EnvSettings(
         token=token,
         ca_bundle_path=ca_bundle_path,
@@ -175,52 +149,67 @@ def _looks_like_pem(data: bytes) -> bool:
     return b"-----BEGIN" in data and b"-----END" in data
 
 
-def _get_env_value(name: str, legacy_names: list[str] | None = None) -> tuple[str | None, list[str]]:
+def has_exact_env_key(name: str) -> bool:
+    return any(key == name for key in os.environ.keys())
+
+
+def get_env_with_deprecated_uppercase(
+    lower: str,
+    upper: str,
+    logger: logging.Logger,
+    warn_code: str,
+) -> str | None:
+    if has_exact_env_key(upper) and not has_exact_env_key(lower):
+        logger.warning(warn_code, extra={"variables": [upper]})
+    return os.getenv(lower) or os.getenv(upper)
+
+
+def _get_env_value(
+    name: str,
+    legacy_names: list[str] | None = None,
+    logger: logging.Logger | None = None,
+    warn_code: str = "deprecated_uppercase_env",
+) -> str | None:
     legacy_names = legacy_names or []
-    raw = _clean_env_value(os.getenv(name))
+    logger = logger or logging.getLogger("wallwatch")
+    raw = _clean_env_value(get_env_with_deprecated_uppercase(name, name.upper(), logger, warn_code))
     if raw is not None:
-        return raw, []
-    upper_name = name.upper()
-    raw = _clean_env_value(os.getenv(upper_name))
-    if raw is not None:
-        return raw, [upper_name]
+        return raw
     for legacy in legacy_names:
-        raw = _clean_env_value(os.getenv(legacy))
+        raw = _clean_env_value(
+            get_env_with_deprecated_uppercase(legacy, legacy.upper(), logger, warn_code)
+        )
         if raw is not None:
-            return raw, []
-        upper_legacy = legacy.upper()
-        raw = _clean_env_value(os.getenv(upper_legacy))
-        if raw is not None:
-            return raw, [upper_legacy]
-    return None, []
+            return raw
+    return None
 
 
-def _parse_float_env(name: str, default: float) -> tuple[float, list[str]]:
-    raw, warnings = _get_env_value(name)
+def _parse_float_env(name: str, default: float) -> float:
+    raw = _get_env_value(name)
     if raw is None:
-        return default, []
+        return default
     try:
-        return float(raw), warnings
+        return float(raw)
     except ValueError as exc:
         raise ConfigError(f"{name} must be a float, got {raw!r}") from exc
 
 
-def _parse_bool_env(name: str, default: bool) -> tuple[bool, list[str]]:
-    raw, warnings = _get_env_value(name)
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw = _get_env_value(name)
     if raw is None:
-        return default, []
+        return default
     value = raw.strip().lower()
     if value in {"1", "true", "yes", "y", "on"}:
-        return True, warnings
+        return True
     if value in {"0", "false", "no", "n", "off"}:
-        return False, warnings
+        return False
     raise ConfigError(f"{name} must be a boolean, got {raw!r}")
 
 
-def _parse_int_list_env(name: str) -> tuple[list[int], list[str]]:
-    raw, warnings = _get_env_value(name)
+def _parse_int_list_env(name: str) -> list[int]:
+    raw = _get_env_value(name)
     if raw is None:
-        return [], []
+        return []
     values: list[int] = []
     for item in raw.split(","):
         cleaned = item.strip()
@@ -230,16 +219,16 @@ def _parse_int_list_env(name: str) -> tuple[list[int], list[str]]:
             values.append(int(cleaned))
         except ValueError as exc:
             raise ConfigError(f"{name} must be a comma-separated list of integers") from exc
-    return values, warnings
+    return values
 
 
-def _parse_parse_mode_env(name: str, default: str) -> tuple[str, list[str]]:
-    raw, warnings = _get_env_value(name)
+def _parse_parse_mode_env(name: str, default: str) -> str:
+    raw = _get_env_value(name)
     if raw is None:
-        return default, []
+        return default
     if raw not in {"HTML", "MarkdownV2"}:
         raise ConfigError(f"{name} must be HTML or MarkdownV2, got {raw!r}")
-    return raw, warnings
+    return raw
 
 
 def _clean_env_value(value: str | None) -> str | None:
