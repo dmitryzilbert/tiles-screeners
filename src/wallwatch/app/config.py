@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import importlib.util
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,19 +29,51 @@ class EnvSettings:
     retry_backoff_initial_seconds: float
     retry_backoff_max_seconds: float
     stream_idle_sleep_seconds: float
+    tg_bot_token: str | None
+    tg_chat_ids: list[int]
+    tg_allowed_user_ids: set[int]
+    tg_polling: bool
+    tg_parse_mode: str
 
 
 def load_env_settings() -> EnvSettings:
-    token = os.getenv("TINVEST_TOKEN") or os.getenv("INVEST_TOKEN")
-    ca_bundle_path = _clean_env_value(os.getenv("TINVEST_CA_BUNDLE_PATH"))
-    ca_bundle_b64 = _clean_env_value(os.getenv("TINVEST_CA_BUNDLE_B64"))
-    retry_backoff_initial_seconds = _parse_float_env(
-        "WALLWATCH_RETRY_BACKOFF_INITIAL_SECONDS", 1.0
+    logger = logging.getLogger("wallwatch")
+    used_uppercase: list[str] = []
+
+    token, warnings = _get_env_value("tinvest_token", legacy_names=["invest_token"])
+    used_uppercase.extend(warnings)
+    ca_bundle_path, warnings = _get_env_value("tinvest_ca_bundle_path")
+    used_uppercase.extend(warnings)
+    ca_bundle_b64, warnings = _get_env_value("tinvest_ca_bundle_b64")
+    used_uppercase.extend(warnings)
+    retry_backoff_initial_seconds, warnings = _parse_float_env(
+        "wallwatch_retry_backoff_initial_seconds", 1.0
     )
-    retry_backoff_max_seconds = _parse_float_env(
-        "WALLWATCH_RETRY_BACKOFF_MAX_SECONDS", 30.0
+    used_uppercase.extend(warnings)
+    retry_backoff_max_seconds, warnings = _parse_float_env(
+        "wallwatch_retry_backoff_max_seconds", 30.0
     )
-    stream_idle_sleep_seconds = _parse_float_env("WALLWATCH_STREAM_IDLE_SLEEP_SECONDS", 3600.0)
+    used_uppercase.extend(warnings)
+    stream_idle_sleep_seconds, warnings = _parse_float_env(
+        "wallwatch_stream_idle_sleep_seconds", 3600.0
+    )
+    used_uppercase.extend(warnings)
+    tg_bot_token, warnings = _get_env_value("tg_bot_token")
+    used_uppercase.extend(warnings)
+    tg_chat_ids, warnings = _parse_int_list_env("tg_chat_id")
+    used_uppercase.extend(warnings)
+    tg_allowed_user_ids, warnings = _parse_int_list_env("tg_allowed_user_ids")
+    used_uppercase.extend(warnings)
+    tg_polling, warnings = _parse_bool_env("tg_polling", True)
+    used_uppercase.extend(warnings)
+    tg_parse_mode, warnings = _parse_parse_mode_env("tg_parse_mode", "HTML")
+    used_uppercase.extend(warnings)
+
+    if used_uppercase:
+        logger.warning(
+            "deprecated_uppercase_env",
+            extra={"variables": sorted(set(used_uppercase))},
+        )
     return EnvSettings(
         token=token,
         ca_bundle_path=ca_bundle_path,
@@ -48,13 +81,18 @@ def load_env_settings() -> EnvSettings:
         retry_backoff_initial_seconds=retry_backoff_initial_seconds,
         retry_backoff_max_seconds=retry_backoff_max_seconds,
         stream_idle_sleep_seconds=stream_idle_sleep_seconds,
+        tg_bot_token=tg_bot_token,
+        tg_chat_ids=tg_chat_ids,
+        tg_allowed_user_ids=set(tg_allowed_user_ids),
+        tg_polling=tg_polling,
+        tg_parse_mode=tg_parse_mode,
     )
 
 
 def missing_required_env(settings: EnvSettings) -> list[str]:
     missing = []
     if not settings.token:
-        missing.append("TINVEST_TOKEN")
+        missing.append("tinvest_token")
     return missing
 
 
@@ -108,28 +146,28 @@ def _load_ca_bundle_b64(value: str) -> bytes:
     try:
         data = base64.b64decode(value, validate=True)
     except (ValueError, binascii.Error) as exc:
-        raise CABundleError("TINVEST_CA_BUNDLE_B64 is not valid base64") from exc
+        raise CABundleError("tinvest_ca_bundle_b64 is not valid base64") from exc
     if not data:
-        raise CABundleError("TINVEST_CA_BUNDLE_B64 decoded to empty content")
+        raise CABundleError("tinvest_ca_bundle_b64 decoded to empty content")
     if not _looks_like_pem(data):
-        raise CABundleError("TINVEST_CA_BUNDLE_B64 does not look like PEM data")
+        raise CABundleError("tinvest_ca_bundle_b64 does not look like PEM data")
     return data
 
 
 def _load_ca_bundle_path(value: str) -> bytes:
     path = Path(value)
     if not path.exists():
-        raise CABundleError(f"TINVEST_CA_BUNDLE_PATH not found: {path}")
+        raise CABundleError(f"tinvest_ca_bundle_path not found: {path}")
     if not path.is_file():
-        raise CABundleError(f"TINVEST_CA_BUNDLE_PATH is not a file: {path}")
+        raise CABundleError(f"tinvest_ca_bundle_path is not a file: {path}")
     try:
         data = path.read_bytes()
     except OSError as exc:
-        raise CABundleError(f"TINVEST_CA_BUNDLE_PATH is not readable: {path}") from exc
+        raise CABundleError(f"tinvest_ca_bundle_path is not readable: {path}") from exc
     if not data:
-        raise CABundleError(f"TINVEST_CA_BUNDLE_PATH is empty: {path}")
+        raise CABundleError(f"tinvest_ca_bundle_path is empty: {path}")
     if not _looks_like_pem(data):
-        raise CABundleError(f"TINVEST_CA_BUNDLE_PATH does not look like PEM: {path}")
+        raise CABundleError(f"tinvest_ca_bundle_path does not look like PEM: {path}")
     return data
 
 
@@ -137,14 +175,65 @@ def _looks_like_pem(data: bytes) -> bool:
     return b"-----BEGIN" in data and b"-----END" in data
 
 
-def _parse_float_env(name: str, default: float) -> float:
-    raw = _clean_env_value(os.getenv(name))
+def _get_env_value(name: str, legacy_names: list[str] | None = None) -> tuple[str | None, list[str]]:
+    legacy_names = legacy_names or []
+    candidates = [name, name.upper()]
+    for legacy in legacy_names:
+        candidates.append(legacy)
+        candidates.append(legacy.upper())
+    for env_name in candidates:
+        raw = _clean_env_value(os.getenv(env_name))
+        if raw is not None:
+            warnings = [env_name] if env_name.isupper() else []
+            return raw, warnings
+    return None, []
+
+
+def _parse_float_env(name: str, default: float) -> tuple[float, list[str]]:
+    raw, warnings = _get_env_value(name)
     if raw is None:
-        return default
+        return default, []
     try:
-        return float(raw)
+        return float(raw), warnings
     except ValueError as exc:
         raise ConfigError(f"{name} must be a float, got {raw!r}") from exc
+
+
+def _parse_bool_env(name: str, default: bool) -> tuple[bool, list[str]]:
+    raw, warnings = _get_env_value(name)
+    if raw is None:
+        return default, []
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True, warnings
+    if value in {"0", "false", "no", "n", "off"}:
+        return False, warnings
+    raise ConfigError(f"{name} must be a boolean, got {raw!r}")
+
+
+def _parse_int_list_env(name: str) -> tuple[list[int], list[str]]:
+    raw, warnings = _get_env_value(name)
+    if raw is None:
+        return [], []
+    values: list[int] = []
+    for item in raw.split(","):
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+        try:
+            values.append(int(cleaned))
+        except ValueError as exc:
+            raise ConfigError(f"{name} must be a comma-separated list of integers") from exc
+    return values, warnings
+
+
+def _parse_parse_mode_env(name: str, default: str) -> tuple[str, list[str]]:
+    raw, warnings = _get_env_value(name)
+    if raw is None:
+        return default, []
+    if raw not in {"HTML", "MarkdownV2"}:
+        raise ConfigError(f"{name} must be HTML or MarkdownV2, got {raw!r}")
+    return raw, warnings
 
 
 def _clean_env_value(value: str | None) -> str | None:

@@ -27,9 +27,10 @@ from wallwatch.notify.notifier import ConsoleNotifier
 def _configure_logger() -> logging.Logger:
     logger = logging.getLogger("wallwatch")
     logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setFormatter(_JsonFormatter())
-    logger.addHandler(handler)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(_JsonFormatter())
+        logger.addHandler(handler)
     return logger
 
 
@@ -71,6 +72,11 @@ async def run_async(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
     if argv[:1] == ["doctor"]:
         await run_doctor_async(argv[1:])
+        return
+    if argv[:1] in (["telegram"], ["tg"]):
+        from wallwatch.app.telegram import run_telegram_async
+
+        await run_telegram_async(argv[1:])
         return
     await run_monitor_async(argv)
 
@@ -162,6 +168,16 @@ async def run_doctor_async(argv: list[str]) -> None:
     parser.add_argument("--config", type=Path, default=None)
     args = parser.parse_args(argv)
 
+    report, fatal = await build_doctor_report(_parse_symbols(args.symbols), args.config)
+    _print_report(report)
+    if fatal:
+        raise SystemExit(1)
+
+
+async def build_doctor_report(
+    symbols: list[str],
+    config_path: Path | None,
+) -> tuple[list[tuple[str, bool, str]], bool]:
     logger = _configure_logger()
     report: list[tuple[str, bool, str]] = []
     fatal = False
@@ -182,7 +198,7 @@ async def run_doctor_async(argv: list[str]) -> None:
             report.append(("env", True, "Required environment variables set"))
 
     try:
-        _ = load_detector_config(args.config)
+        _ = load_detector_config(config_path)
         report.append(("config", True, "Config loaded"))
     except ConfigError as exc:
         report.append(("config", False, str(exc)))
@@ -201,7 +217,6 @@ async def run_doctor_async(argv: list[str]) -> None:
             fatal = True
 
     if not fatal and settings is not None:
-        symbols = _parse_symbols(args.symbols)
         client = MarketDataClient(
             token=settings.token or "",
             logger=logger,
@@ -222,9 +237,7 @@ async def run_doctor_async(argv: list[str]) -> None:
                 report.append(("grpc", False, "No instruments resolved"))
                 fatal = True
 
-    _print_report(report)
-    if fatal:
-        raise SystemExit(1)
+    return report, fatal
 
 
 def _print_report(report: list[tuple[str, bool, str]]) -> None:
