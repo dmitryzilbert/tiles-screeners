@@ -16,10 +16,10 @@ from wallwatch.api.client import MarketDataClient
 from wallwatch.app.config import (
     CABundleError,
     ConfigError,
+    configure_grpc_root_certificates,
     ensure_required_env,
     load_detector_config,
     load_env_settings,
-    resolve_root_certificates,
 )
 from wallwatch.app.main import _configure_logger, build_doctor_report
 from wallwatch.detector.wall_detector import DetectorConfig, WallDetector
@@ -257,16 +257,16 @@ async def run_telegram_async(argv: list[str]) -> None:
     if args.depth is not None:
         config = DetectorConfig(**{**asdict(config), "depth": args.depth})
 
-    try:
-        root_certificates = resolve_root_certificates(settings)
-    except CABundleError as exc:
-        raise SystemExit(str(exc)) from exc
-
     _ensure_telegram_dependency()
     from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
     from telegram import Update
 
     logger = _configure_logger()
+    try:
+        configure_grpc_root_certificates(settings, logger)
+    except CABundleError as exc:
+        raise SystemExit(str(exc)) from exc
+
     bot = ApplicationBuilder().token(settings.tg_bot_token or "").build()
     notifier = TelegramNotifier(
         bot.bot,
@@ -282,7 +282,7 @@ async def run_telegram_async(argv: list[str]) -> None:
     client = MarketDataClient(
         token=settings.token or "",
         logger=logger,
-        root_certificates=root_certificates,
+        root_certificates=None,
         stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
     )
 

@@ -5,6 +5,7 @@ import binascii
 import importlib.util
 import logging
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,6 +37,9 @@ class EnvSettings:
     tg_parse_mode: str
 
 
+GRPC_ROOTS_ENV_VAR = "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"
+
+
 def load_env_settings() -> EnvSettings:
     token = _get_env_value("tinvest_token", legacy_names=["invest_token"])
     ca_bundle_path = _get_env_value("tinvest_ca_bundle_path")
@@ -61,6 +65,23 @@ def load_env_settings() -> EnvSettings:
         tg_polling=tg_polling,
         tg_parse_mode=tg_parse_mode,
     )
+
+
+def configure_grpc_root_certificates(settings: EnvSettings, logger: logging.Logger) -> str | None:
+    if settings.ca_bundle_b64:
+        data = _load_ca_bundle_b64(settings.ca_bundle_b64)
+        path = _write_temp_pem(data)
+    elif settings.ca_bundle_path:
+        _load_ca_bundle_path(settings.ca_bundle_path)
+        path = settings.ca_bundle_path
+    else:
+        return None
+    os.environ[GRPC_ROOTS_ENV_VAR] = path
+    logger.info(
+        "custom_ca_bundle_enabled",
+        extra={"env_var": GRPC_ROOTS_ENV_VAR, "path": path},
+    )
+    return path
 
 
 def missing_required_env(settings: EnvSettings) -> list[str]:
@@ -143,6 +164,12 @@ def _load_ca_bundle_path(value: str) -> bytes:
     if not _looks_like_pem(data):
         raise CABundleError(f"tinvest_ca_bundle_path does not look like PEM: {path}")
     return data
+
+
+def _write_temp_pem(data: bytes) -> str:
+    with tempfile.NamedTemporaryFile(prefix="wallwatch-ca-", suffix=".pem", delete=False) as handle:
+        handle.write(data)
+        return handle.name
 
 
 def _looks_like_pem(data: bytes) -> bool:

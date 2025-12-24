@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -187,26 +186,7 @@ class MarketDataClient:
             await channel.close()
 
     def _client_kwargs(self) -> tuple[dict[str, object], grpc.aio.Channel | None]:
-        if self._root_certificates is None:
-            return {}, None
-        credentials = grpc.ssl_channel_credentials(root_certificates=self._root_certificates)
-        params = inspect.signature(AsyncClient).parameters
-        if "root_certificates" in params:
-            return {"root_certificates": self._root_certificates}, None
-        if "ssl_credentials" in params:
-            return {"ssl_credentials": credentials}, None
-        if "credentials" in params:
-            return {"credentials": credentials}, None
-        if "channel" in params:
-            endpoint = _resolve_grpc_endpoint()
-            if endpoint is None:
-                raise RuntimeError(
-                    "Unable to determine gRPC endpoint for custom CA bundle. "
-                    "Update the client library or use system CA."
-                )
-            channel = grpc.aio.secure_channel(endpoint, credentials)
-            return {"channel": channel}, channel
-        raise RuntimeError("AsyncClient does not support custom gRPC root certificates.")
+        return {}, None
 
 
 def _resolve_grpc_endpoint() -> str | None:

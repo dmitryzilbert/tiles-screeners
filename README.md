@@ -25,6 +25,7 @@ Token is read from `tinvest_token` (or legacy `invest_token`). Uppercase variant
 
 - `tinvest_token` (REQUIRED): gRPC token for T-Invest.
 - `invest_token` (OPTIONAL): legacy fallback token name (use only if `tinvest_token` is unset).
+- `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` (OPTIONAL, recommended for deployments): path to a PEM-encoded CA bundle for gRPC TLS.
 - `tinvest_ca_bundle_path` (OPTIONAL): path to a PEM-encoded CA bundle for gRPC TLS.
 - `tinvest_ca_bundle_b64` (OPTIONAL): base64-encoded PEM bundle for gRPC TLS.
 - `wallwatch_retry_backoff_initial_seconds` (OPTIONAL, default `1.0`): initial retry backoff for reconnects.
@@ -125,8 +126,10 @@ For container images with minimal OS packages:
   ```bash
   apt-get update && apt-get install -y ca-certificates
   ```
-- Or provide a custom CA bundle:
+- Or provide a custom CA bundle (recommended to use the gRPC env var directly):
   ```bash
+  export GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/run/secrets/ca.pem
+  # or use the wallwatch convenience wrapper:
   export tinvest_ca_bundle_path=/run/secrets/ca.pem
   # or
   export tinvest_ca_bundle_b64="$(base64 -w0 /run/secrets/ca.pem)"
