@@ -15,10 +15,16 @@ pip install -e .
 ```bash
 cp .env.example .env
 # edit .env
-export tinvest_token="..."
 wallwatch run --symbols SBER,GAZP --depth 20 --config config.yaml
 ```
 
+Example `.env`:
+
+```dotenv
+tinvest_token="..."
+```
+
+`.env` is loaded automatically from the current working directory (or its parent project root).
 Token is read from `tinvest_token` (or legacy `invest_token`). Uppercase variants are deprecated but still supported.
 
 ## Environment variables
