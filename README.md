@@ -15,21 +15,26 @@ pip install -e .
 ```bash
 cp .env.example .env
 # edit .env
-export TINVEST_TOKEN="..."
+export tinvest_token="..."
 wallwatch --symbols SBER,GAZP --depth 20 --config config.yaml
 ```
 
-Token is read from `TINVEST_TOKEN` (or `INVEST_TOKEN`).
+Token is read from `tinvest_token` (or legacy `invest_token`). Uppercase variants are deprecated but still supported.
 
 ## Environment variables
 
-- `TINVEST_TOKEN` (REQUIRED): gRPC token for T-Invest.
-- `INVEST_TOKEN` (OPTIONAL): legacy fallback token name (use only if `TINVEST_TOKEN` is unset).
-- `TINVEST_CA_BUNDLE_PATH` (OPTIONAL): path to a PEM-encoded CA bundle for gRPC TLS.
-- `TINVEST_CA_BUNDLE_B64` (OPTIONAL): base64-encoded PEM bundle for gRPC TLS.
-- `WALLWATCH_RETRY_BACKOFF_INITIAL_SECONDS` (OPTIONAL, default `1.0`): initial retry backoff for reconnects.
-- `WALLWATCH_RETRY_BACKOFF_MAX_SECONDS` (OPTIONAL, default `30.0`): maximum retry backoff for reconnects.
-- `WALLWATCH_STREAM_IDLE_SLEEP_SECONDS` (OPTIONAL, default `3600.0`): idle sleep between stream keep-alives.
+- `tinvest_token` (REQUIRED): gRPC token for T-Invest.
+- `invest_token` (OPTIONAL): legacy fallback token name (use only if `tinvest_token` is unset).
+- `tinvest_ca_bundle_path` (OPTIONAL): path to a PEM-encoded CA bundle for gRPC TLS.
+- `tinvest_ca_bundle_b64` (OPTIONAL): base64-encoded PEM bundle for gRPC TLS.
+- `wallwatch_retry_backoff_initial_seconds` (OPTIONAL, default `1.0`): initial retry backoff for reconnects.
+- `wallwatch_retry_backoff_max_seconds` (OPTIONAL, default `30.0`): maximum retry backoff for reconnects.
+- `wallwatch_stream_idle_sleep_seconds` (OPTIONAL, default `3600.0`): idle sleep between stream keep-alives.
+- `tg_bot_token` (REQUIRED for Telegram mode): Telegram bot token.
+- `tg_chat_id` (REQUIRED for Telegram mode): chat id(s) for alerts (comma-separated for multiple).
+- `tg_allowed_user_ids` (OPTIONAL): comma-separated user ids allowed to use commands.
+- `tg_polling` (OPTIONAL, default `true`): enable polling mode.
+- `tg_parse_mode` (OPTIONAL, default `HTML`): parse mode (`HTML` or `MarkdownV2`).
 
 ## Config
 
@@ -92,6 +97,24 @@ wallwatch doctor --symbols SBER,GAZP
 
 Doctor validates required environment variables, CA bundle configuration, and resolves instruments.
 
+## Telegram interface
+
+Examples:
+
+```bash
+# Install Telegram extra
+pip install -e ".[telegram]"
+
+# CLI monitoring only
+wallwatch --symbols SBER,GAZP --depth 20 --config config.yaml
+
+# Telegram interface (commands + monitoring)
+wallwatch telegram --symbols SBER,GAZP --config config.yaml
+
+# Telegram interface + alerts (same mode; alerts go to tg_chat_id)
+wallwatch telegram --symbols SBER,GAZP --config config.yaml
+```
+
 ## Deployment notes
 
 For container images with minimal OS packages:
@@ -102,7 +125,7 @@ For container images with minimal OS packages:
   ```
 - Or provide a custom CA bundle:
   ```bash
-  export TINVEST_CA_BUNDLE_PATH=/run/secrets/ca.pem
+  export tinvest_ca_bundle_path=/run/secrets/ca.pem
   # or
-  export TINVEST_CA_BUNDLE_B64="$(base64 -w0 /run/secrets/ca.pem)"
+  export tinvest_ca_bundle_b64="$(base64 -w0 /run/secrets/ca.pem)"
   ```

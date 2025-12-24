@@ -16,6 +16,11 @@ def _settings(**overrides: object) -> EnvSettings:
         "retry_backoff_initial_seconds": 1.0,
         "retry_backoff_max_seconds": 30.0,
         "stream_idle_sleep_seconds": 3600.0,
+        "tg_bot_token": None,
+        "tg_chat_ids": [],
+        "tg_allowed_user_ids": set(),
+        "tg_polling": True,
+        "tg_parse_mode": "HTML",
     }
     data.update(overrides)
     return EnvSettings(**data)
@@ -23,7 +28,7 @@ def _settings(**overrides: object) -> EnvSettings:
 
 def test_missing_token_raises() -> None:
     settings = _settings(token=None)
-    with pytest.raises(ConfigError, match="TINVEST_TOKEN"):
+    with pytest.raises(ConfigError, match="tinvest_token"):
         ensure_required_env(settings)
 
 
@@ -54,6 +59,8 @@ def test_ca_bundle_path_not_readable(tmp_path: Path) -> None:
     ca_path = tmp_path / "ca.pem"
     ca_path.write_text("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
     ca_path.chmod(0)
+    if os.access(ca_path, os.R_OK):
+        pytest.skip("chmod permissions are not enforced in this environment")
     settings = _settings(ca_bundle_path=str(ca_path))
     with pytest.raises(CABundleError, match="not readable"):
         load_ca_bundle(settings)

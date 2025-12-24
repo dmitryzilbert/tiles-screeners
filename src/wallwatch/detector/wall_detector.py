@@ -54,6 +54,15 @@ class WallDetector:
             instrument_id=instrument_id, tick_size=tick_size, symbol=symbol
         )
 
+    def remove_instrument(self, instrument_id: str) -> None:
+        self._states.pop(instrument_id, None)
+
+    def instrument_ids(self) -> set[str]:
+        return set(self._states.keys())
+
+    def list_states(self) -> list[InstrumentState]:
+        return list(self._states.values())
+
     def on_trade(self, trade: Trade) -> list[Alert]:
         state = self._states.get(trade.instrument_id)
         if state is None:
