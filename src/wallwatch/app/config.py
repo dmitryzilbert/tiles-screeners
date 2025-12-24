@@ -177,15 +177,21 @@ def _looks_like_pem(data: bytes) -> bool:
 
 def _get_env_value(name: str, legacy_names: list[str] | None = None) -> tuple[str | None, list[str]]:
     legacy_names = legacy_names or []
-    candidates = [name, name.upper()]
+    raw = _clean_env_value(os.getenv(name))
+    if raw is not None:
+        return raw, []
+    upper_name = name.upper()
+    raw = _clean_env_value(os.getenv(upper_name))
+    if raw is not None:
+        return raw, [upper_name]
     for legacy in legacy_names:
-        candidates.append(legacy)
-        candidates.append(legacy.upper())
-    for env_name in candidates:
-        raw = _clean_env_value(os.getenv(env_name))
+        raw = _clean_env_value(os.getenv(legacy))
         if raw is not None:
-            warnings = [env_name] if env_name.isupper() else []
-            return raw, warnings
+            return raw, []
+        upper_legacy = legacy.upper()
+        raw = _clean_env_value(os.getenv(upper_legacy))
+        if raw is not None:
+            return raw, [upper_legacy]
     return None, []
 
 
