@@ -148,6 +148,7 @@ async def run_monitor_async(argv: list[str]) -> None:
         logger=logger,
         root_certificates=None,
         stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
+        instrument_status=settings.instrument_status,
     )
 
     resolved, failures = await client.resolve_instruments(symbols)
@@ -257,6 +258,7 @@ async def build_doctor_report(
             logger=logger,
             root_certificates=None,
             stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
+            instrument_status=settings.instrument_status,
         )
         try:
             resolved, failures = await client.resolve_instruments(grpc_symbols)

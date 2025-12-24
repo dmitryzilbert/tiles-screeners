@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from t_tech.invest import schemas
 
 from wallwatch.detector.wall_detector import DetectorConfig
 
@@ -30,6 +31,7 @@ class EnvSettings:
     retry_backoff_initial_seconds: float
     retry_backoff_max_seconds: float
     stream_idle_sleep_seconds: float
+    instrument_status: schemas.InstrumentStatus
     tg_bot_token: str | None
     tg_chat_ids: list[int]
     tg_allowed_user_ids: set[int]
@@ -47,6 +49,10 @@ def load_env_settings() -> EnvSettings:
     retry_backoff_initial_seconds = _parse_float_env("wallwatch_retry_backoff_initial_seconds", 1.0)
     retry_backoff_max_seconds = _parse_float_env("wallwatch_retry_backoff_max_seconds", 30.0)
     stream_idle_sleep_seconds = _parse_float_env("wallwatch_stream_idle_sleep_seconds", 3600.0)
+    instrument_status = _parse_instrument_status_env(
+        "wallwatch_instrument_status",
+        schemas.InstrumentStatus.INSTRUMENT_STATUS_BASE,
+    )
     tg_bot_token = _get_env_value("tg_bot_token")
     tg_chat_ids = _parse_int_list_env("tg_chat_id")
     tg_allowed_user_ids = _parse_int_list_env("tg_allowed_user_ids")
@@ -59,6 +65,7 @@ def load_env_settings() -> EnvSettings:
         retry_backoff_initial_seconds=retry_backoff_initial_seconds,
         retry_backoff_max_seconds=retry_backoff_max_seconds,
         stream_idle_sleep_seconds=stream_idle_sleep_seconds,
+        instrument_status=instrument_status,
         tg_bot_token=tg_bot_token,
         tg_chat_ids=tg_chat_ids,
         tg_allowed_user_ids=set(tg_allowed_user_ids),
@@ -256,6 +263,20 @@ def _parse_parse_mode_env(name: str, default: str) -> str:
     if raw not in {"HTML", "MarkdownV2"}:
         raise ConfigError(f"{name} must be HTML or MarkdownV2, got {raw!r}")
     return raw
+
+
+def _parse_instrument_status_env(
+    name: str, default: schemas.InstrumentStatus
+) -> schemas.InstrumentStatus:
+    raw = _get_env_value(name)
+    if raw is None:
+        return default
+    value = raw.strip().upper()
+    if value == "BASE":
+        return schemas.InstrumentStatus.INSTRUMENT_STATUS_BASE
+    if value == "ALL":
+        return schemas.InstrumentStatus.INSTRUMENT_STATUS_ALL
+    raise ConfigError(f"{name} must be BASE or ALL, got {raw!r}")
 
 
 def _clean_env_value(value: str | None) -> str | None:
