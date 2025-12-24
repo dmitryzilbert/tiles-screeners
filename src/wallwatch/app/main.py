@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from dotenv import find_dotenv, load_dotenv
 from wallwatch.api.client import MarketDataClient
 from wallwatch.app.config import (
     CABundleError,
@@ -67,6 +68,12 @@ class _JsonFormatter(logging.Formatter):
 DEFAULT_DOCTOR_SYMBOLS = ["SBER"]
 
 
+def _load_dotenv() -> None:
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+
+
 def _parse_symbols(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
@@ -92,6 +99,7 @@ def _build_doctor_parser() -> argparse.ArgumentParser:
 
 async def run_async(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
+    _load_dotenv()
     if argv[:1] == ["run"]:
         await run_monitor_async(argv[1:])
         return

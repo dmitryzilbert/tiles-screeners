@@ -14,6 +14,7 @@ classifiers = [
 dependencies = [
   "t-tech-investments>=0.3.0",
   "PyYAML>=6.0",
+  "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
