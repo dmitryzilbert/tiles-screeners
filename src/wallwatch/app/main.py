@@ -4,15 +4,22 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import signal
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from wallwatch.api.client import MarketDataClient
+from wallwatch.app.config import (
+    CABundleError,
+    ConfigError,
+    ensure_required_env,
+    load_detector_config,
+    load_env_settings,
+    missing_required_env,
+    resolve_root_certificates,
+)
 from wallwatch.detector.wall_detector import DetectorConfig, WallDetector
 from wallwatch.notify.notifier import ConsoleNotifier
 
@@ -56,36 +63,56 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
-def load_config(path: Path | None) -> DetectorConfig:
-    if path is None:
-        return DetectorConfig()
-    content = yaml.safe_load(path.read_text()) or {}
-    return DetectorConfig(**content)
+def _parse_symbols(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-async def run_async() -> None:
+async def run_async(argv: list[str] | None = None) -> None:
+    argv = argv if argv is not None else sys.argv[1:]
+    if argv[:1] == ["doctor"]:
+        await run_doctor_async(argv[1:])
+        return
+    await run_monitor_async(argv)
+
+
+async def run_monitor_async(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(description="Order book wall monitor")
     parser.add_argument("--symbols", required=True, help="Comma separated symbols/ISINs")
     parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--config", type=Path, default=None)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    config = load_config(args.config)
+    try:
+        settings = load_env_settings()
+        ensure_required_env(settings)
+    except ConfigError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    try:
+        config = load_detector_config(args.config)
+    except ConfigError as exc:
+        raise SystemExit(str(exc)) from exc
     if args.depth is not None:
         config = DetectorConfig(**{**asdict(config), "depth": args.depth})
 
-    symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]
+    symbols = _parse_symbols(args.symbols)
     if len(symbols) > config.max_symbols:
         symbols = symbols[: config.max_symbols]
 
-    token = os.getenv("TINVEST_TOKEN") or os.getenv("INVEST_TOKEN")
-    if not token:
-        raise SystemExit("TINVEST_TOKEN is required")
+    try:
+        root_certificates = resolve_root_certificates(settings)
+    except CABundleError as exc:
+        raise SystemExit(str(exc)) from exc
 
     logger = _configure_logger()
     detector = WallDetector(config)
     notifier = ConsoleNotifier()
-    client = MarketDataClient(token=token, logger=logger)
+    client = MarketDataClient(
+        token=settings.token or "",
+        logger=logger,
+        root_certificates=root_certificates,
+        stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
+    )
 
     resolved, failures = await client.resolve_instruments(symbols)
     for item in failures:
@@ -111,7 +138,7 @@ async def run_async() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal)
 
-    backoff = 1.0
+    backoff = settings.retry_backoff_initial_seconds
     while not stop_event.is_set():
         try:
             await client.stream_market_data(
@@ -122,11 +149,88 @@ async def run_async() -> None:
                 on_alerts=lambda alerts: [notifier.notify(alert) for alert in alerts],
                 stop_event=stop_event,
             )
-            backoff = 1.0
+            backoff = settings.retry_backoff_initial_seconds
         except Exception as exc:  # noqa: BLE001
             logger.error("stream_failed", extra={"error": str(exc)})
             await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 30.0)
+            backoff = min(backoff * 2, settings.retry_backoff_max_seconds)
+
+
+async def run_doctor_async(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(description="WallWatch preflight checks")
+    parser.add_argument("--symbols", required=True, help="Comma separated symbols/ISINs")
+    parser.add_argument("--config", type=Path, default=None)
+    args = parser.parse_args(argv)
+
+    logger = _configure_logger()
+    report: list[tuple[str, bool, str]] = []
+    fatal = False
+
+    try:
+        settings = load_env_settings()
+    except ConfigError as exc:
+        report.append(("env", False, str(exc)))
+        settings = None
+        fatal = True
+
+    if settings is not None:
+        missing = missing_required_env(settings)
+        if missing:
+            report.append(("env", False, f"Missing required: {', '.join(missing)}"))
+            fatal = True
+        else:
+            report.append(("env", True, "Required environment variables set"))
+
+    try:
+        _ = load_detector_config(args.config)
+        report.append(("config", True, "Config loaded"))
+    except ConfigError as exc:
+        report.append(("config", False, str(exc)))
+        fatal = True
+
+    root_certificates = None
+    if settings is not None:
+        try:
+            root_certificates = resolve_root_certificates(settings)
+            if settings.ca_bundle_b64 or settings.ca_bundle_path:
+                report.append(("ca_bundle", True, "Custom CA bundle loaded"))
+            else:
+                report.append(("ca_bundle", True, "Using system/available CA bundle"))
+        except CABundleError as exc:
+            report.append(("ca_bundle", False, str(exc)))
+            fatal = True
+
+    if not fatal and settings is not None:
+        symbols = _parse_symbols(args.symbols)
+        client = MarketDataClient(
+            token=settings.token or "",
+            logger=logger,
+            root_certificates=root_certificates,
+            stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
+        )
+        try:
+            resolved, failures = await client.resolve_instruments(symbols)
+        except Exception as exc:  # noqa: BLE001
+            report.append(("grpc", False, f"gRPC request failed: {exc}"))
+            fatal = True
+        else:
+            if resolved:
+                report.append(("grpc", True, f"Resolved {len(resolved)} instrument(s)"))
+                if failures:
+                    logger.warning("instrument_resolve_failed", extra={"symbols": failures})
+            else:
+                report.append(("grpc", False, "No instruments resolved"))
+                fatal = True
+
+    _print_report(report)
+    if fatal:
+        raise SystemExit(1)
+
+
+def _print_report(report: list[tuple[str, bool, str]]) -> None:
+    for name, ok, message in report:
+        status = "OK" if ok else "FAIL"
+        print(f"{status}\t{name}\t{message}")
 
 
 def main() -> None:
