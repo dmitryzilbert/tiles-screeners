@@ -14,11 +14,11 @@ from wallwatch.api.client import MarketDataClient
 from wallwatch.app.config import (
     CABundleError,
     ConfigError,
+    configure_grpc_root_certificates,
     ensure_required_env,
     load_detector_config,
     load_env_settings,
     missing_required_env,
-    resolve_root_certificates,
 )
 from wallwatch.detector.wall_detector import DetectorConfig, WallDetector
 from wallwatch.notify.notifier import ConsoleNotifier
@@ -127,18 +127,18 @@ async def run_monitor_async(argv: list[str]) -> None:
     if len(symbols) > config.max_symbols:
         symbols = symbols[: config.max_symbols]
 
+    logger = _configure_logger()
     try:
-        root_certificates = resolve_root_certificates(settings)
+        configure_grpc_root_certificates(settings, logger)
     except CABundleError as exc:
         raise SystemExit(str(exc)) from exc
 
-    logger = _configure_logger()
     detector = WallDetector(config)
     notifier = ConsoleNotifier()
     client = MarketDataClient(
         token=settings.token or "",
         logger=logger,
-        root_certificates=root_certificates,
+        root_certificates=None,
         stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
     )
 
@@ -224,12 +224,18 @@ async def build_doctor_report(
         report.append(("config", False, str(exc)))
         fatal = True
 
-    root_certificates = None
+    grpc_ca_path = None
     if settings is not None:
         try:
-            root_certificates = resolve_root_certificates(settings)
-            if settings.ca_bundle_b64 or settings.ca_bundle_path:
-                report.append(("ca_bundle", True, "Custom CA bundle loaded"))
+            grpc_ca_path = configure_grpc_root_certificates(settings, logger)
+            if grpc_ca_path:
+                report.append(
+                    (
+                        "ca_bundle",
+                        True,
+                        f"Using GRPC_DEFAULT_SSL_ROOTS_FILE_PATH={grpc_ca_path}",
+                    )
+                )
             else:
                 report.append(("ca_bundle", True, "Using system/available CA bundle"))
         except CABundleError as exc:
@@ -241,7 +247,7 @@ async def build_doctor_report(
         client = MarketDataClient(
             token=settings.token or "",
             logger=logger,
-            root_certificates=root_certificates,
+            root_certificates=None,
             stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
         )
         try:
