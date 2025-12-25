@@ -80,6 +80,63 @@ def _build_debug_snapshot(size: float) -> OrderBookSnapshot:
     )
 
 
+def _event_detector() -> WallDetector:
+    config = DetectorConfig(
+        depth=20,
+        distance_ticks=2,
+        k_ratio=1.0,
+        abs_qty_threshold=0.0,
+        dwell_seconds=2.0,
+        reposition_window_seconds=2,
+        reposition_ticks=2,
+        reposition_similar_pct=0.2,
+        reposition_max=0,
+        trades_window_seconds=10,
+        Emin=10,
+        Amin=0.1,
+        cancel_share_max=0.7,
+        consuming_drop_pct=0.2,
+        consuming_window_seconds=5,
+        min_exec_confirm=5,
+        cooldown_confirmed_seconds=5,
+        cooldown_consuming_seconds=3,
+        vref_levels=2,
+    )
+    detector = WallDetector(config)
+    detector.upsert_instrument("inst", tick_size=1.0, symbol="TEST")
+    return detector
+
+
+def _event_snapshot(ts: datetime, size: float, price: float = 100.0) -> OrderBookSnapshot:
+    bids = [
+        OrderBookLevel(price=101.0, quantity=120.0),
+        OrderBookLevel(price=price, quantity=size),
+        OrderBookLevel(price=99.0, quantity=90.0),
+    ]
+    asks = [OrderBookLevel(price=102.0, quantity=80.0)]
+    return OrderBookSnapshot(
+        instrument_id="inst",
+        bids=bids,
+        asks=asks,
+        best_bid=101.0,
+        best_ask=102.0,
+        ts=ts,
+    )
+
+
+def _no_candidate_snapshot(ts: datetime) -> OrderBookSnapshot:
+    bids: list[OrderBookLevel] = []
+    asks: list[OrderBookLevel] = []
+    return OrderBookSnapshot(
+        instrument_id="inst",
+        bids=bids,
+        asks=asks,
+        best_bid=None,
+        best_ask=None,
+        ts=ts,
+    )
+
+
 def test_real_wall_triggers_confirm_and_consuming() -> None:
     detector = _detector()
     assert detector.on_order_book(_snapshot(_ts(0), 1000.0)) == []
@@ -142,3 +199,37 @@ def test_wall_debug_candidate_requires_thresholds() -> None:
     assert debug_payload["raw_candidate_present"] is True
     assert debug_payload["passes"]["candidate_ok"] is False
     assert debug_payload["state"] == "NONE"
+
+
+def test_wall_events_emit_once_per_transition() -> None:
+    detector = _event_detector()
+
+    alerts, events = detector.on_order_book_with_events(_event_snapshot(_ts(0), 500.0))
+    assert alerts == []
+    assert [event.event for event in events] == ["wall_candidate"]
+
+    _, events = detector.on_order_book_with_events(_event_snapshot(_ts(1), 500.0))
+    assert events == []
+
+    _, events = detector.on_order_book_with_events(_event_snapshot(_ts(2), 500.0))
+    assert [event.event for event in events] == ["wall_confirmed"]
+
+    _, events = detector.on_order_book_with_events(_event_snapshot(_ts(3), 350.0))
+    assert [event.event for event in events] == ["wall_consuming"]
+
+    _, events = detector.on_order_book_with_events(_event_snapshot(_ts(4), 350.0))
+    assert events == []
+
+    _, events = detector.on_order_book_with_events(_no_candidate_snapshot(_ts(5)))
+    assert [event.event for event in events] == ["wall_lost"]
+
+
+def test_wall_events_skip_without_transition() -> None:
+    detector = _event_detector()
+
+    _, events = detector.on_order_book_with_events(_event_snapshot(_ts(0), 500.0))
+    assert [event.event for event in events] == ["wall_candidate"]
+
+    for offset in (1, 1.5, 1.8):
+        _, events = detector.on_order_book_with_events(_event_snapshot(_ts(offset), 500.0))
+        assert events == []
