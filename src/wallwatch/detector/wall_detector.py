@@ -412,6 +412,34 @@ class WallDetector:
         else:
             state.last_debug_candidate_size = None
 
+        candidate_ratio_threshold = self._config.k_ratio
+        candidate_distance_threshold = self._config.distance_ticks
+        candidate_top_levels = self._config.vref_levels
+        confirm_dwell_seconds = self._config.dwell_seconds
+        confirm_max_distance_ticks = self._config.reposition_ticks
+
+        ratio_ok = candidate is not None and candidate.ratio >= candidate_ratio_threshold
+        distance_ok = (
+            candidate is not None and candidate.distance_ticks <= candidate_distance_threshold
+        )
+        topn_ok = False
+        if candidate is not None:
+            levels = snapshot.bids if candidate.side == Side.BUY else snapshot.asks
+            candidate_index = next(
+                (index for index, level in enumerate(levels) if level.price == candidate.price),
+                None,
+            )
+            if candidate_index is not None:
+                topn_ok = candidate_index < candidate_top_levels
+        candidate_ok = ratio_ok and distance_ok and topn_ok
+        confirm_ok = (
+            candidate_ok
+            and wall is not None
+            and dwell_seconds >= confirm_dwell_seconds
+            and wall.distance_ticks <= confirm_max_distance_ticks
+        )
+        raw_candidate_present = candidate is not None
+
         debug_state = "NONE"
         if candidate is not None and wall is not None:
             if wall.confirmed_ts is not None:
@@ -422,7 +450,7 @@ class WallDetector:
                     else "CONFIRMED"
                 )
             else:
-                debug_state = "CANDIDATE"
+                debug_state = "CANDIDATE" if candidate_ok else "NONE"
 
         return {
             "symbol": state.symbol,
@@ -437,6 +465,21 @@ class WallDetector:
             "dwell_seconds": round(dwell_seconds, 3),
             "qty_change_last_interval": qty_change_last_interval,
             "teleport_detected": teleport_detected,
+            "raw_candidate_present": raw_candidate_present,
+            "thresholds": {
+                "candidate_ratio_to_median": candidate_ratio_threshold,
+                "candidate_max_distance_ticks": candidate_distance_threshold,
+                "top_n_levels": candidate_top_levels,
+                "confirm_dwell_seconds": confirm_dwell_seconds,
+                "confirm_max_distance_ticks": confirm_max_distance_ticks,
+            },
+            "passes": {
+                "ratio_ok": ratio_ok,
+                "distance_ok": distance_ok,
+                "topn_ok": topn_ok,
+                "candidate_ok": candidate_ok,
+                "confirm_ok": confirm_ok,
+            },
             "state": debug_state,
         }
 

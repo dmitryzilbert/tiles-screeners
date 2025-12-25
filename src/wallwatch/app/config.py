@@ -216,6 +216,7 @@ def load_app_config(path: Path | None) -> AppConfig:
         raise ConfigError(f"Invalid YAML in config file: {path}") from exc
     if not isinstance(content, dict):
         raise ConfigError("Config root must be a mapping")
+    _log_unknown_config_keys(content)
     return _parse_app_config(content)
 
 
@@ -492,8 +493,13 @@ def _has_config_sections(raw: dict[str, Any]) -> bool:
 def _parse_legacy_detector_config(raw: dict[str, Any]) -> AppConfig:
     if not raw:
         return AppConfig()
+    cleaned = {
+        key: value
+        for key, value in raw.items()
+        if key in DetectorConfig.__dataclass_fields__ and value is not None
+    }
     try:
-        legacy = DetectorConfig(**raw)
+        legacy = DetectorConfig(**cleaned)
     except TypeError as exc:
         raise ConfigError(f"Invalid config keys: {', '.join(raw.keys())}") from exc
     return _app_config_from_detector(legacy)
@@ -538,7 +544,7 @@ def _parse_marketdata_config(raw: dict[str, Any]) -> MarketDataConfig:
     base = MarketDataConfig()
     if not raw:
         return base
-    depth = raw.get("depth", base.depth)
+    depth = _value_or_default(raw, "depth", base.depth)
     return MarketDataConfig(depth=_parse_int_value(depth, "marketdata.depth"))
 
 
@@ -548,34 +554,40 @@ def _parse_walls_config(raw: dict[str, Any]) -> WallsConfig:
         return base
     return WallsConfig(
         top_n_levels=_parse_int_value(
-            raw.get("top_n_levels", base.top_n_levels), "walls.top_n_levels"
+            _value_or_default(raw, "top_n_levels", base.top_n_levels), "walls.top_n_levels"
         ),
         candidate_ratio_to_median=_parse_float_value(
-            raw.get("candidate_ratio_to_median", base.candidate_ratio_to_median),
+            _value_or_default(
+                raw, "candidate_ratio_to_median", base.candidate_ratio_to_median
+            ),
             "walls.candidate_ratio_to_median",
         ),
         candidate_max_distance_ticks=_parse_int_value(
-            raw.get("candidate_max_distance_ticks", base.candidate_max_distance_ticks),
+            _value_or_default(
+                raw, "candidate_max_distance_ticks", base.candidate_max_distance_ticks
+            ),
             "walls.candidate_max_distance_ticks",
         ),
         confirm_dwell_seconds=_parse_float_value(
-            raw.get("confirm_dwell_seconds", base.confirm_dwell_seconds),
+            _value_or_default(raw, "confirm_dwell_seconds", base.confirm_dwell_seconds),
             "walls.confirm_dwell_seconds",
         ),
         confirm_max_distance_ticks=_parse_int_value(
-            raw.get("confirm_max_distance_ticks", base.confirm_max_distance_ticks),
+            _value_or_default(
+                raw, "confirm_max_distance_ticks", base.confirm_max_distance_ticks
+            ),
             "walls.confirm_max_distance_ticks",
         ),
         consume_window_seconds=_parse_float_value(
-            raw.get("consume_window_seconds", base.consume_window_seconds),
+            _value_or_default(raw, "consume_window_seconds", base.consume_window_seconds),
             "walls.consume_window_seconds",
         ),
         consume_drop_pct=_parse_float_value(
-            raw.get("consume_drop_pct", base.consume_drop_pct),
+            _value_or_default(raw, "consume_drop_pct", base.consume_drop_pct),
             "walls.consume_drop_pct",
         ),
         teleport_reset=_parse_bool_value_yaml(
-            raw.get("teleport_reset", base.teleport_reset),
+            _value_or_default(raw, "teleport_reset", base.teleport_reset),
             "walls.teleport_reset",
         ),
     )
@@ -587,14 +599,69 @@ def _parse_debug_config(raw: dict[str, Any]) -> DebugConfig:
         return base
     return DebugConfig(
         walls_enabled=_parse_bool_value_yaml(
-            raw.get("walls_enabled", base.walls_enabled),
+            _value_or_default(raw, "walls_enabled", base.walls_enabled),
             "debug.walls_enabled",
         ),
         walls_interval_seconds=_parse_float_value(
-            raw.get("walls_interval_seconds", base.walls_interval_seconds),
+            _value_or_default(raw, "walls_interval_seconds", base.walls_interval_seconds),
             "debug.walls_interval_seconds",
         ),
     )
+
+
+def _value_or_default(raw: dict[str, Any], key: str, default: Any) -> Any:
+    value = raw.get(key, default)
+    return default if value is None else value
+
+
+def _log_unknown_config_keys(raw: dict[str, Any]) -> None:
+    keys = _collect_unknown_keys(raw)
+    if keys:
+        _log_unknown_config_keys_list(keys)
+
+
+def _log_unknown_config_keys_list(keys: list[str]) -> None:
+    logger = logging.getLogger("wallwatch")
+    logger.warning("unknown_config_keys", extra={"keys": sorted(keys)})
+
+
+def _collect_unknown_keys(raw: dict[str, Any]) -> list[str]:
+    if not raw:
+        return []
+    if not _has_config_sections(raw):
+        return sorted(set(raw.keys()) - set(DetectorConfig.__dataclass_fields__.keys()))
+
+    unknown: list[str] = []
+    top_level_allowed = {"logging", "marketdata", "walls", "debug"}
+    for key in raw.keys():
+        if key not in top_level_allowed:
+            unknown.append(key)
+
+    section_allowed = {
+        "logging": {"level"},
+        "marketdata": {"depth"},
+        "walls": {
+            "top_n_levels",
+            "candidate_ratio_to_median",
+            "candidate_max_distance_ticks",
+            "confirm_dwell_seconds",
+            "confirm_max_distance_ticks",
+            "consume_window_seconds",
+            "consume_drop_pct",
+            "teleport_reset",
+        },
+        "debug": {"walls_enabled", "walls_interval_seconds"},
+    }
+    for section, allowed_keys in section_allowed.items():
+        raw_section = raw.get(section)
+        if raw_section is None:
+            continue
+        if not isinstance(raw_section, dict):
+            continue
+        for key in raw_section.keys():
+            if key not in allowed_keys:
+                unknown.append(f"{section}.{key}")
+    return sorted(set(unknown))
 
 
 def _parse_log_level_value(value: Any, name: str) -> int:
