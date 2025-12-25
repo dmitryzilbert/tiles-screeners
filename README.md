@@ -48,33 +48,41 @@ Token is read from `tinvest_token` (or legacy `invest_token`). Uppercase variant
 
 ## Config
 
-Example `config.yaml`:
+Use a YAML config to tune detector thresholds without code changes. Secrets stay in `.env`.
+
+Example `config.yaml` (see `config.example.yaml`):
 
 ```yaml
-max_symbols: 10
-depth: 20
-distance_ticks: 10
-k_ratio: 10
-abs_qty_threshold: 0
+logging:
+  level: INFO
 
-dwell_seconds: 30
-reposition_window_seconds: 3
-reposition_ticks: 1
-reposition_similar_pct: 0.2
-reposition_max: 1
+marketdata:
+  depth: 20
 
-trades_window_seconds: 20
-Emin: 200
-Amin: 0.2
-cancel_share_max: 0.7
+walls:
+  top_n_levels: 5
+  candidate_ratio_to_median: 12.0
+  candidate_max_distance_ticks: 2
+  confirm_dwell_seconds: 3.0
+  confirm_max_distance_ticks: 1
+  consume_window_seconds: 3.0
+  consume_drop_pct: 25.0
+  teleport_reset: true
 
-consuming_drop_pct: 0.2
-consuming_window_seconds: 8
-min_exec_confirm: 50
-
-cooldown_confirmed_seconds: 120
-cooldown_consuming_seconds: 45
+debug:
+  walls_enabled: false
+  walls_interval_seconds: 1.0
 ```
+
+### Config priority
+
+Priority order for overlapping settings:
+
+1. CLI flags (explicitly passed)
+2. YAML config (`--config`)
+3. Environment variables / defaults
+
+`marketdata.depth` is applied unless `--depth` is provided. `logging.level` is applied unless `--log-level` is provided.
 
 ## Calibration guidance
 

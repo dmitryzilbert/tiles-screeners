@@ -40,6 +40,7 @@ class DetectorConfig:
     cooldown_confirmed_seconds: float = 120.0
     cooldown_consuming_seconds: float = 45.0
     vref_levels: int = 10
+    teleport_reset: bool = False
 
 
 class WallDetector:
@@ -238,6 +239,8 @@ class WallDetector:
                 if price_delta <= max_delta and size_similarity <= self._config.reposition_similar_pct:
                     reposition_count = wall.reposition_count + 1
                     teleport_detected = True
+                    if self._config.teleport_reset:
+                        reposition_count = 0
         new_wall = ActiveWall(
             side=candidate.side,
             price=candidate.price,

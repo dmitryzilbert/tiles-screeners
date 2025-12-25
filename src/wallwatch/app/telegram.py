@@ -19,9 +19,10 @@ from wallwatch.app.config import (
     ConfigError,
     configure_grpc_root_certificates,
     ensure_required_env,
-    load_detector_config,
+    load_app_config,
     load_env_settings,
-    parse_log_level,
+    resolve_depth,
+    resolve_log_level,
 )
 from wallwatch.app.main import _configure_logger, build_doctor_report
 from wallwatch.detector.wall_detector import DetectorConfig, WallDetector
@@ -259,7 +260,13 @@ async def run_telegram_async(argv: list[str]) -> None:
         sys.exit(1)
 
     try:
-        log_level = settings.log_level if args.log_level is None else parse_log_level(args.log_level)
+        config = load_app_config(args.config)
+    except ConfigError as exc:
+        logger.error("config_error", extra={"error": str(exc)})
+        sys.exit(1)
+
+    try:
+        log_level = resolve_log_level(args.log_level, config.logging.level, settings.log_level)
     except ConfigError as exc:
         logger.error("config_error", extra={"error": str(exc)})
         sys.exit(1)
@@ -279,13 +286,9 @@ async def run_telegram_async(argv: list[str]) -> None:
         )
         sys.exit(1)
 
-    try:
-        config = load_detector_config(args.config)
-    except ConfigError as exc:
-        logger.error("config_error", extra={"error": str(exc)})
-        sys.exit(1)
-    if args.depth is not None:
-        config = DetectorConfig(**{**asdict(config), "depth": args.depth})
+    detector_config = config.detector_config()
+    depth = resolve_depth(args.depth, detector_config.depth)
+    detector_config = DetectorConfig(**{**asdict(detector_config), "depth": depth})
 
     _ensure_telegram_dependency(logger)
     from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
@@ -306,8 +309,8 @@ async def run_telegram_async(argv: list[str]) -> None:
     )
 
     initial_symbols = _parse_symbols(args.symbols)
-    if len(initial_symbols) > config.max_symbols:
-        initial_symbols = initial_symbols[: config.max_symbols]
+    if len(initial_symbols) > detector_config.max_symbols:
+        initial_symbols = initial_symbols[: detector_config.max_symbols]
 
     client = MarketDataClient(
         token=settings.token or "",
@@ -318,11 +321,11 @@ async def run_telegram_async(argv: list[str]) -> None:
     )
 
     monitor = TelegramMonitor(
-        config=config,
+        config=detector_config,
         client=client,
         notifier=notifier,
         logger=logger,
-        max_symbols=config.max_symbols,
+        max_symbols=detector_config.max_symbols,
         initial_symbols=initial_symbols,
     )
 
