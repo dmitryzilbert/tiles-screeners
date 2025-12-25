@@ -71,8 +71,11 @@ class ActiveWall:
     first_seen: datetime
     last_seen: datetime
     last_size: float
+    distance_ticks: int
+    ratio_to_median: float
     reposition_count: int = 0
     confirmed_ts: Optional[datetime] = None
+    consuming_ts: Optional[datetime] = None
     last_confirm_alert_ts: Optional[datetime] = None
     last_consuming_alert_ts: Optional[datetime] = None
     size_history: Deque[tuple[datetime, float]] = field(
@@ -90,3 +93,30 @@ class InstrumentState:
     active_wall: Optional[ActiveWall] = None
     last_debug_ts: Optional[datetime] = None
     last_debug_candidate_size: Optional[float] = None
+
+
+@dataclass
+class WallEvent:
+    event: str
+    symbol: str
+    side: Side
+    price: float
+    qty: float
+    distance_ticks: int
+    ratio_to_median: float
+    dwell_seconds: float
+    reason: Optional[str] = None
+
+    def to_log_extra(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "symbol": self.symbol,
+            "side": self.side,
+            "price": self.price,
+            "qty": self.qty,
+            "distance_ticks": self.distance_ticks,
+            "ratio_to_median": self.ratio_to_median,
+            "dwell_seconds": self.dwell_seconds,
+        }
+        if self.reason is not None:
+            payload["reason"] = self.reason
+        return payload

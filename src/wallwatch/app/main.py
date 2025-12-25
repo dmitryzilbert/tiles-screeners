@@ -27,7 +27,7 @@ from wallwatch.app.config import (
 )
 from wallwatch.detector.wall_detector import DetectorConfig, WallDetector
 from wallwatch.notify.notifier import ConsoleNotifier
-from wallwatch.state.models import Alert, OrderBookSnapshot, Trade
+from wallwatch.state.models import Alert, OrderBookSnapshot, Trade, WallEvent
 
 
 def _configure_logger(level: int = logging.INFO) -> logging.Logger:
@@ -38,6 +38,11 @@ def _configure_logger(level: int = logging.INFO) -> logging.Logger:
         handler.setFormatter(_JsonFormatter())
         logger.addHandler(handler)
     return logger
+
+
+def _log_wall_events(logger: logging.Logger, events: list[WallEvent]) -> None:
+    for event in events:
+        logger.info(event.event, extra=event.to_log_extra())
 
 
 class _JsonFormatter(logging.Formatter):
@@ -296,13 +301,16 @@ async def run_monitor_async(argv: list[str]) -> None:
                         debug_interval = args.debug_walls_interval
                         if debug_interval is None:
                             debug_interval = config.debug.walls_interval_seconds
-                        alerts, debug_payload = detector.on_order_book_with_debug(
+                        alerts, debug_payload, events = detector.on_order_book_with_debug(
                             snapshot, debug_interval
                         )
+                        _log_wall_events(logger, events)
                         if debug_payload is not None:
                             logger.info("wall_debug", extra=debug_payload)
                         return alerts
-                    return detector.on_order_book(snapshot)
+                    alerts, events = detector.on_order_book_with_events(snapshot)
+                    _log_wall_events(logger, events)
+                    return alerts
 
                 def _on_trade(trade: Trade) -> list[Alert]:
                     nonlocal rx_trades_last_interval, rx_total_trades
