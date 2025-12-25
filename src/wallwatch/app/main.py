@@ -455,7 +455,10 @@ def _log_report(report: list[tuple[str, bool, str]], logger: logging.Logger) -> 
 
 
 def main() -> None:
-    asyncio.run(run_async())
+    try:
+        asyncio.run(run_async())
+    except KeyboardInterrupt:
+        return 0
 
 
 if __name__ == "__main__":

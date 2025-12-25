@@ -253,23 +253,27 @@ class MarketDataClient:
         stop_event: asyncio.Event,
     ) -> None:
         async with self._client() as client:
-            async for response in client.market_data_stream.market_data_stream(
-                self._subscription_requests(instruments, depth)
-            ):
-                if stop_event.is_set():
-                    break
-                if response.orderbook:
-                    snapshot = self._map_order_book(response.orderbook)
-                    if snapshot is not None:
-                        alerts = on_order_book(snapshot)
-                        if alerts:
-                            on_alerts(alerts)
-                if response.trade:
-                    trade = self._map_trade(response.trade)
-                    if trade is not None:
-                        alerts = on_trade(trade)
-                        if alerts:
-                            on_alerts(alerts)
+            try:
+                async for response in client.market_data_stream.market_data_stream(
+                    self._subscription_requests(instruments, depth)
+                ):
+                    if stop_event.is_set():
+                        break
+                    if response.orderbook:
+                        snapshot = self._map_order_book(response.orderbook)
+                        if snapshot is not None:
+                            alerts = on_order_book(snapshot)
+                            if alerts:
+                                on_alerts(alerts)
+                    if response.trade:
+                        trade = self._map_trade(response.trade)
+                        if trade is not None:
+                            alerts = on_trade(trade)
+                            if alerts:
+                                on_alerts(alerts)
+            except asyncio.CancelledError:
+                self._logger.info({"message": "shutdown", "reason": "cancelled"})
+                return
 
     def _subscription_requests(
         self, instruments: list[InstrumentInfo], depth: int
