@@ -40,24 +40,56 @@ class EnvSettings:
 
 
 GRPC_ROOTS_ENV_VAR = "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"
+_DEPRECATED_UPPERCASE_WARNED = False
 
 
-def load_env_settings() -> EnvSettings:
-    token = _get_env_value("tinvest_token", legacy_names=["invest_token"])
-    ca_bundle_path = _get_env_value("tinvest_ca_bundle_path")
-    ca_bundle_b64 = _get_env_value("tinvest_ca_bundle_b64")
-    retry_backoff_initial_seconds = _parse_float_env("wallwatch_retry_backoff_initial_seconds", 1.0)
-    retry_backoff_max_seconds = _parse_float_env("wallwatch_retry_backoff_max_seconds", 30.0)
-    stream_idle_sleep_seconds = _parse_float_env("wallwatch_stream_idle_sleep_seconds", 3600.0)
+def load_env_settings(warn_deprecated_env: bool | None = None) -> EnvSettings:
+    warn_deprecated_env = _resolve_warn_deprecated_env(warn_deprecated_env)
+    token = _get_env_value(
+        "tinvest_token",
+        legacy_names=["invest_token"],
+        warn_deprecated_env=warn_deprecated_env,
+    )
+    ca_bundle_path = _get_env_value(
+        "tinvest_ca_bundle_path",
+        warn_deprecated_env=warn_deprecated_env,
+    )
+    ca_bundle_b64 = _get_env_value(
+        "tinvest_ca_bundle_b64",
+        warn_deprecated_env=warn_deprecated_env,
+    )
+    retry_backoff_initial_seconds = _parse_float_env(
+        "wallwatch_retry_backoff_initial_seconds",
+        1.0,
+        warn_deprecated_env=warn_deprecated_env,
+    )
+    retry_backoff_max_seconds = _parse_float_env(
+        "wallwatch_retry_backoff_max_seconds",
+        30.0,
+        warn_deprecated_env=warn_deprecated_env,
+    )
+    stream_idle_sleep_seconds = _parse_float_env(
+        "wallwatch_stream_idle_sleep_seconds",
+        3600.0,
+        warn_deprecated_env=warn_deprecated_env,
+    )
     instrument_status = _parse_instrument_status_env(
         "wallwatch_instrument_status",
         schemas.InstrumentStatus.INSTRUMENT_STATUS_BASE,
+        warn_deprecated_env=warn_deprecated_env,
     )
-    tg_bot_token = _get_env_value("tg_bot_token")
-    tg_chat_ids = _parse_int_list_env("tg_chat_id")
-    tg_allowed_user_ids = _parse_int_list_env("tg_allowed_user_ids")
-    tg_polling = _parse_bool_env("tg_polling", True)
-    tg_parse_mode = _parse_parse_mode_env("tg_parse_mode", "HTML")
+    tg_bot_token = _get_env_value("tg_bot_token", warn_deprecated_env=warn_deprecated_env)
+    tg_chat_ids = _parse_int_list_env("tg_chat_id", warn_deprecated_env=warn_deprecated_env)
+    tg_allowed_user_ids = _parse_int_list_env(
+        "tg_allowed_user_ids",
+        warn_deprecated_env=warn_deprecated_env,
+    )
+    tg_polling = _parse_bool_env("tg_polling", True, warn_deprecated_env=warn_deprecated_env)
+    tg_parse_mode = _parse_parse_mode_env(
+        "tg_parse_mode",
+        "HTML",
+        warn_deprecated_env=warn_deprecated_env,
+    )
     return EnvSettings(
         token=token,
         ca_bundle_path=ca_bundle_path,
@@ -192,8 +224,16 @@ def get_env_with_deprecated_uppercase(
     upper: str,
     logger: logging.Logger,
     warn_code: str,
+    warn_deprecated_env: bool,
 ) -> str | None:
-    if has_exact_env_key(upper) and not has_exact_env_key(lower):
+    global _DEPRECATED_UPPERCASE_WARNED
+    if (
+        warn_deprecated_env
+        and not _DEPRECATED_UPPERCASE_WARNED
+        and has_exact_env_key(upper)
+        and not has_exact_env_key(lower)
+    ):
+        _DEPRECATED_UPPERCASE_WARNED = True
         logger.warning(warn_code, extra={"variables": [upper]})
     return os.getenv(lower) or os.getenv(upper)
 
@@ -203,23 +243,38 @@ def _get_env_value(
     legacy_names: list[str] | None = None,
     logger: logging.Logger | None = None,
     warn_code: str = "deprecated_uppercase_env",
+    warn_deprecated_env: bool = False,
 ) -> str | None:
     legacy_names = legacy_names or []
     logger = logger or logging.getLogger("wallwatch")
-    raw = _clean_env_value(get_env_with_deprecated_uppercase(name, name.upper(), logger, warn_code))
+    raw = _clean_env_value(
+        get_env_with_deprecated_uppercase(
+            name,
+            name.upper(),
+            logger,
+            warn_code,
+            warn_deprecated_env,
+        )
+    )
     if raw is not None:
         return raw
     for legacy in legacy_names:
         raw = _clean_env_value(
-            get_env_with_deprecated_uppercase(legacy, legacy.upper(), logger, warn_code)
+            get_env_with_deprecated_uppercase(
+                legacy,
+                legacy.upper(),
+                logger,
+                warn_code,
+                warn_deprecated_env,
+            )
         )
         if raw is not None:
             return raw
     return None
 
 
-def _parse_float_env(name: str, default: float) -> float:
-    raw = _get_env_value(name)
+def _parse_float_env(name: str, default: float, warn_deprecated_env: bool = False) -> float:
+    raw = _get_env_value(name, warn_deprecated_env=warn_deprecated_env)
     if raw is None:
         return default
     try:
@@ -228,20 +283,15 @@ def _parse_float_env(name: str, default: float) -> float:
         raise ConfigError(f"{name} must be a float, got {raw!r}") from exc
 
 
-def _parse_bool_env(name: str, default: bool) -> bool:
-    raw = _get_env_value(name)
+def _parse_bool_env(name: str, default: bool, warn_deprecated_env: bool = False) -> bool:
+    raw = _get_env_value(name, warn_deprecated_env=warn_deprecated_env)
     if raw is None:
         return default
-    value = raw.strip().lower()
-    if value in {"1", "true", "yes", "y", "on"}:
-        return True
-    if value in {"0", "false", "no", "n", "off"}:
-        return False
-    raise ConfigError(f"{name} must be a boolean, got {raw!r}")
+    return _parse_bool_value(name, raw)
 
 
-def _parse_int_list_env(name: str) -> list[int]:
-    raw = _get_env_value(name)
+def _parse_int_list_env(name: str, warn_deprecated_env: bool = False) -> list[int]:
+    raw = _get_env_value(name, warn_deprecated_env=warn_deprecated_env)
     if raw is None:
         return []
     values: list[int] = []
@@ -256,8 +306,8 @@ def _parse_int_list_env(name: str) -> list[int]:
     return values
 
 
-def _parse_parse_mode_env(name: str, default: str) -> str:
-    raw = _get_env_value(name)
+def _parse_parse_mode_env(name: str, default: str, warn_deprecated_env: bool = False) -> str:
+    raw = _get_env_value(name, warn_deprecated_env=warn_deprecated_env)
     if raw is None:
         return default
     if raw not in {"HTML", "MarkdownV2"}:
@@ -266,9 +316,11 @@ def _parse_parse_mode_env(name: str, default: str) -> str:
 
 
 def _parse_instrument_status_env(
-    name: str, default: schemas.InstrumentStatus
+    name: str,
+    default: schemas.InstrumentStatus,
+    warn_deprecated_env: bool = False,
 ) -> schemas.InstrumentStatus:
-    raw = _get_env_value(name)
+    raw = _get_env_value(name, warn_deprecated_env=warn_deprecated_env)
     if raw is None:
         return default
     value = raw.strip().upper()
@@ -284,3 +336,21 @@ def _clean_env_value(value: str | None) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+def _parse_bool_value(name: str, raw: str) -> bool:
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ConfigError(f"{name} must be a boolean, got {raw!r}")
+
+
+def _resolve_warn_deprecated_env(warn_deprecated_env: bool | None) -> bool:
+    if warn_deprecated_env is not None:
+        return warn_deprecated_env
+    raw = os.getenv("warn_deprecated_env") or os.getenv("WARN_DEPRECATED_ENV")
+    if raw is None:
+        return False
+    return _parse_bool_value("warn_deprecated_env", raw)
