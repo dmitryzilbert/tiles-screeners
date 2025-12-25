@@ -26,6 +26,7 @@ from wallwatch.app.config import (
 )
 from wallwatch.detector.wall_detector import DetectorConfig, WallDetector
 from wallwatch.notify.notifier import ConsoleNotifier
+from wallwatch.state.models import Alert, OrderBookSnapshot, Trade
 
 
 def _configure_logger(level: int = logging.INFO) -> logging.Logger:
@@ -204,6 +205,10 @@ async def run_monitor_async(argv: list[str]) -> None:
     last_message_ts: float | None = None
     connection_state: dict[str, object] = {"state": "idle", "backoff_seconds": None}
     connected_logged = False
+    rx_orderbooks_last_interval = 0
+    rx_trades_last_interval = 0
+    rx_total_orderbooks = 0
+    rx_total_trades = 0
 
     logger.info(
         "startup",
@@ -232,6 +237,7 @@ async def run_monitor_async(argv: list[str]) -> None:
             loop.add_signal_handler(sig, _handle_signal)
 
     async def _heartbeat() -> None:
+        nonlocal rx_orderbooks_last_interval, rx_trades_last_interval
         while not stop_event.is_set():
             await asyncio.sleep(15.0)
             now = time.monotonic()
@@ -240,10 +246,16 @@ async def run_monitor_async(argv: list[str]) -> None:
                 "alive": True,
                 "since_last_message_seconds": since_last,
                 "state": connection_state.get("state"),
+                "rx_orderbooks_last_interval": rx_orderbooks_last_interval,
+                "rx_trades_last_interval": rx_trades_last_interval,
+                "rx_total_orderbooks": rx_total_orderbooks,
+                "rx_total_trades": rx_total_trades,
             }
             if connection_state.get("state") == "backoff":
                 extra["backoff_seconds"] = connection_state.get("backoff_seconds")
             logger.info("heartbeat", extra=extra)
+            rx_orderbooks_last_interval = 0
+            rx_trades_last_interval = 0
 
     heartbeat_task = asyncio.create_task(_heartbeat())
 
@@ -264,13 +276,25 @@ async def run_monitor_async(argv: list[str]) -> None:
                         connection_state["state"] = "connected"
                         logger.info("connected")
 
+                def _on_order_book(snapshot: OrderBookSnapshot) -> list[Alert]:
+                    nonlocal rx_orderbooks_last_interval, rx_total_orderbooks
+                    _mark_connected()
+                    rx_orderbooks_last_interval += 1
+                    rx_total_orderbooks += 1
+                    return detector.on_order_book(snapshot)
+
+                def _on_trade(trade: Trade) -> list[Alert]:
+                    nonlocal rx_trades_last_interval, rx_total_trades
+                    _mark_connected()
+                    rx_trades_last_interval += 1
+                    rx_total_trades += 1
+                    return detector.on_trade(trade)
+
                 await client.stream_market_data(
                     instruments=resolved,
                     depth=config.depth,
-                    on_order_book=lambda snapshot: (
-                        _mark_connected() or detector.on_order_book(snapshot)
-                    ),
-                    on_trade=lambda trade: _mark_connected() or detector.on_trade(trade),
+                    on_order_book=_on_order_book,
+                    on_trade=_on_trade,
                     on_alerts=lambda alerts: [notifier.notify(alert) for alert in alerts],
                     stop_event=stop_event,
                 )
