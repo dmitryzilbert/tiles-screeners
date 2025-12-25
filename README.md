@@ -25,7 +25,8 @@ tinvest_token="..."
 ```
 
 `.env` is loaded automatically from the current working directory (or its parent project root).
-Token is read from `tinvest_token` (or legacy `invest_token`). Uppercase variants are deprecated but still supported.
+Token is read from `tinvest_token` (or legacy `invest_token`). Uppercase variants are deprecated but still supported; set
+`warn_deprecated_env=1` to emit a one-time warning during startup.
 
 ## Environment variables
 
@@ -43,6 +44,7 @@ Token is read from `tinvest_token` (or legacy `invest_token`). Uppercase variant
 - `tg_allowed_user_ids` (OPTIONAL): comma-separated user ids allowed to use commands.
 - `tg_polling` (OPTIONAL, default `true`): enable polling mode.
 - `tg_parse_mode` (OPTIONAL, default `HTML`): parse mode (`HTML` or `MarkdownV2`).
+- `warn_deprecated_env` (OPTIONAL, default `false`): emit a one-time warning if uppercase env keys are used.
 
 ## Config
 
