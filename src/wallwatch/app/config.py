@@ -28,6 +28,7 @@ class EnvSettings:
     token: str | None
     ca_bundle_path: str | None
     ca_bundle_b64: str | None
+    log_level: int
     retry_backoff_initial_seconds: float
     retry_backoff_max_seconds: float
     stream_idle_sleep_seconds: float
@@ -56,6 +57,11 @@ def load_env_settings(warn_deprecated_env: bool | None = None) -> EnvSettings:
     )
     ca_bundle_b64 = _get_env_value(
         "tinvest_ca_bundle_b64",
+        warn_deprecated_env=warn_deprecated_env,
+    )
+    log_level = _parse_log_level_env(
+        "log_level",
+        logging.INFO,
         warn_deprecated_env=warn_deprecated_env,
     )
     retry_backoff_initial_seconds = _parse_float_env(
@@ -94,6 +100,7 @@ def load_env_settings(warn_deprecated_env: bool | None = None) -> EnvSettings:
         token=token,
         ca_bundle_path=ca_bundle_path,
         ca_bundle_b64=ca_bundle_b64,
+        log_level=log_level,
         retry_backoff_initial_seconds=retry_backoff_initial_seconds,
         retry_backoff_max_seconds=retry_backoff_max_seconds,
         stream_idle_sleep_seconds=stream_idle_sleep_seconds,
@@ -354,3 +361,28 @@ def _resolve_warn_deprecated_env(warn_deprecated_env: bool | None) -> bool:
     if raw is None:
         return False
     return _parse_bool_value("warn_deprecated_env", raw)
+
+
+def parse_log_level(value: str, name: str = "log_level") -> int:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ConfigError(f"{name} must be a valid log level, got {value!r}")
+    upper = cleaned.upper()
+    if upper.isdigit():
+        level = int(upper)
+    else:
+        level = logging._nameToLevel.get(upper, -1)
+    if level < 0:
+        raise ConfigError(f"{name} must be a valid log level, got {value!r}")
+    return level
+
+
+def _parse_log_level_env(
+    name: str,
+    default: int,
+    warn_deprecated_env: bool = False,
+) -> int:
+    raw = _get_env_value(name, warn_deprecated_env=warn_deprecated_env)
+    if raw is None:
+        return default
+    return parse_log_level(raw, name=name)

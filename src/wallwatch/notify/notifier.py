@@ -15,22 +15,26 @@ class Notifier:
 
 @dataclass
 class ConsoleNotifier(Notifier):
+    logger: logging.Logger
+
     def notify(self, alert: Alert) -> None:
-        parts = [
-            f"event={alert.event}",
-            f"instrument={alert.instrument_id}",
-            f"side={alert.side}",
-            f"price={alert.price}",
-            f"size={alert.size}",
-            f"ratio={alert.ratio:.2f}",
-            f"v_ref={alert.v_ref:.2f}",
-            f"distance_ticks={alert.distance_ticks}",
-            f"dwell={alert.dwell_seconds:.1f}s",
-            f"executed_at_wall={alert.executed_at_wall:.2f}",
-            f"cancel_share={alert.cancel_share:.2f}",
-            f"reasons={','.join(alert.reasons)}",
-        ]
-        print(" ".join(parts))
+        self.logger.info(
+            "alert",
+            extra={
+                "event": alert.event,
+                "instrument": alert.instrument_id,
+                "side": alert.side,
+                "price": alert.price,
+                "size": alert.size,
+                "ratio": round(alert.ratio, 2),
+                "v_ref": round(alert.v_ref, 2),
+                "distance_ticks": alert.distance_ticks,
+                "dwell_seconds": round(alert.dwell_seconds, 1),
+                "executed_at_wall": round(alert.executed_at_wall, 2),
+                "cancel_share": round(alert.cancel_share, 2),
+                "reasons": alert.reasons,
+            },
+        )
 
 
 class TelegramNotifier(Notifier):

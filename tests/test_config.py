@@ -13,6 +13,7 @@ def _settings(**overrides: object) -> EnvSettings:
         "token": "token",
         "ca_bundle_path": None,
         "ca_bundle_b64": None,
+        "log_level": 20,
         "retry_backoff_initial_seconds": 1.0,
         "retry_backoff_max_seconds": 30.0,
         "stream_idle_sleep_seconds": 3600.0,
