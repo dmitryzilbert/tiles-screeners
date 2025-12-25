@@ -296,6 +296,27 @@ async def run_telegram_async(argv: list[str]) -> None:
     depth = resolve_depth(args.depth, detector_config.depth)
     detector_config = DetectorConfig(**{**asdict(detector_config), "depth": depth})
 
+    debug_enabled = config.debug.walls_enabled
+
+    logger.info(
+        "effective_config",
+        extra={
+            "config_path": str(args.config) if args.config else None,
+            "logging.level": log_level,
+            "marketdata.depth": detector_config.depth,
+            "debug.walls_enabled": debug_enabled,
+            "debug.walls_interval_seconds": config.debug.walls_interval_seconds,
+            "walls.top_n_levels": config.walls.top_n_levels,
+            "walls.candidate_ratio_to_median": config.walls.candidate_ratio_to_median,
+            "walls.candidate_max_distance_ticks": config.walls.candidate_max_distance_ticks,
+            "walls.confirm_dwell_seconds": config.walls.confirm_dwell_seconds,
+            "walls.confirm_max_distance_ticks": config.walls.confirm_max_distance_ticks,
+            "walls.consume_window_seconds": config.walls.consume_window_seconds,
+            "walls.consume_drop_pct": config.walls.consume_drop_pct,
+            "walls.teleport_reset": config.walls.teleport_reset,
+        },
+    )
+
     _ensure_telegram_dependency(logger)
     from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
     from telegram import Update

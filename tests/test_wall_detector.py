@@ -64,6 +64,22 @@ def _detector() -> WallDetector:
     return detector
 
 
+def _build_debug_snapshot(size: float) -> OrderBookSnapshot:
+    bids = [
+        OrderBookLevel(price=101.0, quantity=100.0),
+        OrderBookLevel(price=100.0, quantity=size),
+    ]
+    asks = [OrderBookLevel(price=102.0, quantity=100.0)]
+    return OrderBookSnapshot(
+        instrument_id="inst",
+        bids=bids,
+        asks=asks,
+        best_bid=101.0,
+        best_ask=102.0,
+        ts=_ts(0),
+    )
+
+
 def test_real_wall_triggers_confirm_and_consuming() -> None:
     detector = _detector()
     assert detector.on_order_book(_snapshot(_ts(0), 1000.0)) == []
@@ -92,3 +108,37 @@ def test_cancel_without_trades_does_not_confirm() -> None:
     detector.on_order_book(_snapshot(_ts(2), 600.0))
     alerts = detector.on_order_book(_snapshot(_ts(3), 600.0))
     assert not any(alert.event == "ALERT_WALL_CONFIRMED" for alert in alerts)
+
+
+def test_wall_debug_candidate_requires_thresholds() -> None:
+    config = DetectorConfig(
+        depth=20,
+        distance_ticks=1,
+        k_ratio=10,
+        abs_qty_threshold=0,
+        dwell_seconds=2,
+        reposition_window_seconds=2,
+        reposition_ticks=1,
+        reposition_similar_pct=0.2,
+        reposition_max=0,
+        trades_window_seconds=10,
+        Emin=10,
+        Amin=0.1,
+        cancel_share_max=0.7,
+        consuming_drop_pct=0.2,
+        consuming_window_seconds=5,
+        min_exec_confirm=5,
+        cooldown_confirmed_seconds=5,
+        cooldown_consuming_seconds=3,
+        vref_levels=2,
+    )
+    detector = WallDetector(config)
+    detector.upsert_instrument("inst", tick_size=1.0, symbol="TEST")
+
+    snapshot = _build_debug_snapshot(size=300.0)
+    _, debug_payload, _ = detector.on_order_book_with_debug(snapshot, debug_interval=0.0)
+
+    assert debug_payload is not None
+    assert debug_payload["raw_candidate_present"] is True
+    assert debug_payload["passes"]["candidate_ok"] is False
+    assert debug_payload["state"] == "NONE"

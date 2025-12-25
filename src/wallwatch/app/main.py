@@ -185,12 +185,36 @@ async def run_monitor_async(argv: list[str]) -> None:
         symbols = symbols[: detector_config.max_symbols]
 
     debug_enabled = config.debug.walls_enabled if args.debug_walls is None else args.debug_walls
+    debug_interval = (
+        config.debug.walls_interval_seconds
+        if args.debug_walls_interval is None
+        else args.debug_walls_interval
+    )
 
     try:
         configure_grpc_root_certificates(settings, logger)
     except CABundleError as exc:
         logger.error("config_error", extra={"error": str(exc)})
         sys.exit(1)
+
+    logger.info(
+        "effective_config",
+        extra={
+            "config_path": str(args.config) if args.config else None,
+            "logging.level": log_level,
+            "marketdata.depth": detector_config.depth,
+            "debug.walls_enabled": debug_enabled,
+            "debug.walls_interval_seconds": debug_interval,
+            "walls.top_n_levels": config.walls.top_n_levels,
+            "walls.candidate_ratio_to_median": config.walls.candidate_ratio_to_median,
+            "walls.candidate_max_distance_ticks": config.walls.candidate_max_distance_ticks,
+            "walls.confirm_dwell_seconds": config.walls.confirm_dwell_seconds,
+            "walls.confirm_max_distance_ticks": config.walls.confirm_max_distance_ticks,
+            "walls.consume_window_seconds": config.walls.consume_window_seconds,
+            "walls.consume_drop_pct": config.walls.consume_drop_pct,
+            "walls.teleport_reset": config.walls.teleport_reset,
+        },
+    )
 
     detector = WallDetector(detector_config)
     notifier = ConsoleNotifier(logger)

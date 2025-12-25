@@ -115,3 +115,38 @@ marketdata:
 
     assert depth == 50
     assert log_level == 20
+
+
+def test_walls_config_from_yaml_overrides_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+walls:
+  candidate_ratio_to_median: 123
+""".lstrip()
+    )
+
+    config = load_app_config(config_path)
+
+    assert config.walls.candidate_ratio_to_median == 123.0
+
+
+def test_unknown_config_keys_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+unknown_root: 1
+walls:
+  candidate_ratio_to_median: 5
+  weird: 2
+""".lstrip()
+    )
+
+    with caplog.at_level("WARNING"):
+        _ = load_app_config(config_path)
+
+    matches = [record for record in caplog.records if record.message == "unknown_config_keys"]
+    assert matches
+    keys = matches[-1].__dict__.get("keys")
+    assert "unknown_root" in keys
+    assert "walls.weird" in keys
