@@ -7,7 +7,7 @@ import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import AsyncIterator, Callable, Iterable
+from typing import Any, AsyncIterator, Callable, Iterable, Optional
 
 import grpc
 import t_tech.invest as tinvest
@@ -55,16 +55,25 @@ _KIND_RANKS = {
 }
 
 
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 def _quotation_to_float(value) -> float:
     return float(quotation_to_decimal(value))
 
 
-def _timestamp_to_datetime(value) -> datetime:
-    return value.ToDatetime().astimezone(timezone.utc) if value else _now_utc()
+def to_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    to_datetime_method = getattr(value, "ToDatetime", None)
+    if callable(to_datetime_method):
+        return to_datetime_method()
+    if isinstance(value, datetime):
+        return value
+    seconds = getattr(value, "seconds", None)
+    if isinstance(seconds, int):
+        nanos = getattr(value, "nanos", 0)
+        if isinstance(nanos, int):
+            return datetime.fromtimestamp(seconds + nanos / 1_000_000_000, tz=timezone.utc)
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    return None
 
 
 def get_msg_instrument_key(msg) -> str | None:
@@ -319,13 +328,20 @@ class MarketDataClient:
         ]
         best_bid = bids[0].price if bids else None
         best_ask = asks[0].price if asks else None
+        ts = to_datetime(orderbook.time)
+        if ts is None:
+            self._logger.warning(
+                "orderbook_time_missing",
+                extra={"instrument_id": instrument_id},
+            )
+            return None
         return OrderBookSnapshot(
             instrument_id=instrument_id,
             bids=bids,
             asks=asks,
             best_bid=best_bid,
             best_ask=best_ask,
-            ts=_timestamp_to_datetime(orderbook.time),
+            ts=ts,
         )
 
     def _map_trade(self, trade) -> Trade | None:
@@ -334,12 +350,19 @@ class MarketDataClient:
             self._logger.warning("trade_instrument_missing")
             return None
         side = Side.BUY if trade.direction == 1 else Side.SELL if trade.direction == 2 else None
+        ts = to_datetime(trade.time)
+        if ts is None:
+            self._logger.warning(
+                "trade_time_missing",
+                extra={"instrument_id": instrument_id},
+            )
+            return None
         return Trade(
             instrument_id=instrument_id,
             price=_quotation_to_float(trade.price),
             quantity=float(trade.quantity),
             side=side,
-            ts=_timestamp_to_datetime(trade.time),
+            ts=ts,
         )
 
     @asynccontextmanager
