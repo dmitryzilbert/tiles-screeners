@@ -37,6 +37,7 @@ Token is read from `tinvest_token` (or legacy `invest_token`). Uppercase variant
 - `wallwatch_retry_backoff_initial_seconds` (OPTIONAL, default `1.0`): initial retry backoff for reconnects.
 - `wallwatch_retry_backoff_max_seconds` (OPTIONAL, default `30.0`): maximum retry backoff for reconnects.
 - `wallwatch_stream_idle_sleep_seconds` (OPTIONAL, default `3600.0`): idle sleep between stream keep-alives.
+- `wallwatch_instrument_status` (OPTIONAL, default `BASE`): instrument status for instrument lookup (`BASE` or `ALL`).
 - `tg_bot_token` (REQUIRED for Telegram mode): Telegram bot token.
 - `tg_chat_id` (REQUIRED for Telegram mode): chat id(s) for alerts (comma-separated for multiple).
 - `tg_allowed_user_ids` (OPTIONAL): comma-separated user ids allowed to use commands.
