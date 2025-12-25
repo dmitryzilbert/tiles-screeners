@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 from t_tech.invest import schemas
@@ -37,6 +38,7 @@ def test_map_order_book_uses_instrument_uid() -> None:
         instrument_uid="uid-123",
         bids=[FakeOrderLevel(price=schemas.Quotation(units=1, nano=0), quantity=10.0)],
         asks=[FakeOrderLevel(price=schemas.Quotation(units=2, nano=0), quantity=20.0)],
+        time=datetime.now(timezone.utc),
     )
 
     snapshot = client._map_order_book(orderbook)
@@ -52,6 +54,7 @@ def test_map_trade_uses_instrument_uid() -> None:
         price=schemas.Quotation(units=3, nano=0),
         quantity=5.0,
         direction=1,
+        time=datetime.now(timezone.utc),
     )
 
     mapped_trade = client._map_trade(trade)
