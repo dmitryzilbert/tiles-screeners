@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from wallwatch.app import main as app_main
+from wallwatch.app.config import AppConfig
 from wallwatch.api.client import InstrumentInfo
 
 
@@ -93,7 +94,7 @@ def test_run_monitor_async_windows_skips_signal_handlers(
     monkeypatch.setattr(app_main, "load_env_settings", lambda: settings)
     monkeypatch.setattr(app_main, "ensure_required_env", lambda _: None)
     monkeypatch.setattr(app_main, "configure_grpc_root_certificates", lambda *_: None)
-    monkeypatch.setattr(app_main, "load_detector_config", lambda _: app_main.DetectorConfig())
+    monkeypatch.setattr(app_main, "load_app_config", lambda _: AppConfig())
 
     class DummyClient:
         def __init__(self, **_: object) -> None:

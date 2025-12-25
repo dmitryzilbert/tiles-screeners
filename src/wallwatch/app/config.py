@@ -8,6 +8,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 from t_tech.invest import schemas
@@ -38,6 +39,61 @@ class EnvSettings:
     tg_polling: bool
     tg_parse_mode: str
     instrument_status: schemas.InstrumentStatus = schemas.InstrumentStatus.INSTRUMENT_STATUS_BASE
+
+
+@dataclass(frozen=True)
+class LoggingConfig:
+    level: int | None = None
+
+
+@dataclass(frozen=True)
+class MarketDataConfig:
+    depth: int = DetectorConfig().depth
+
+
+@dataclass(frozen=True)
+class WallsConfig:
+    top_n_levels: int = DetectorConfig().vref_levels
+    candidate_ratio_to_median: float = DetectorConfig().k_ratio
+    candidate_max_distance_ticks: int = DetectorConfig().distance_ticks
+    confirm_dwell_seconds: float = DetectorConfig().dwell_seconds
+    confirm_max_distance_ticks: int = DetectorConfig().reposition_ticks
+    consume_window_seconds: float = DetectorConfig().consuming_window_seconds
+    consume_drop_pct: float = DetectorConfig().consuming_drop_pct * 100.0
+    teleport_reset: bool = False
+
+
+@dataclass(frozen=True)
+class DebugConfig:
+    walls_enabled: bool = False
+    walls_interval_seconds: float = 1.0
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    logging: LoggingConfig = LoggingConfig()
+    marketdata: MarketDataConfig = MarketDataConfig()
+    walls: WallsConfig = WallsConfig()
+    debug: DebugConfig = DebugConfig()
+    detector_defaults: DetectorConfig = DetectorConfig()
+
+    def detector_config(self) -> DetectorConfig:
+        base = self.detector_defaults
+        walls = self.walls
+        return DetectorConfig(
+            **{
+                **base.__dict__,
+                "depth": self.marketdata.depth,
+                "vref_levels": walls.top_n_levels,
+                "k_ratio": walls.candidate_ratio_to_median,
+                "distance_ticks": walls.candidate_max_distance_ticks,
+                "dwell_seconds": walls.confirm_dwell_seconds,
+                "reposition_ticks": walls.confirm_max_distance_ticks,
+                "consuming_window_seconds": walls.consume_window_seconds,
+                "consuming_drop_pct": walls.consume_drop_pct / 100.0,
+                "teleport_reset": walls.teleport_reset,
+            }
+        )
 
 
 GRPC_ROOTS_ENV_VAR = "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"
@@ -144,8 +200,12 @@ def ensure_required_env(settings: EnvSettings) -> None:
 
 
 def load_detector_config(path: Path | None) -> DetectorConfig:
+    return load_app_config(path).detector_config()
+
+
+def load_app_config(path: Path | None) -> AppConfig:
     if path is None:
-        return DetectorConfig()
+        return AppConfig()
     if not path.exists():
         raise ConfigError(f"Config file not found: {path}")
     try:
@@ -154,7 +214,9 @@ def load_detector_config(path: Path | None) -> DetectorConfig:
         raise ConfigError(f"Unable to read config file: {path}") from exc
     except yaml.YAMLError as exc:
         raise ConfigError(f"Invalid YAML in config file: {path}") from exc
-    return DetectorConfig(**content)
+    if not isinstance(content, dict):
+        raise ConfigError("Config root must be a mapping")
+    return _parse_app_config(content)
 
 
 def load_ca_bundle(settings: EnvSettings) -> bytes | None:
@@ -377,6 +439,16 @@ def parse_log_level(value: str, name: str = "log_level") -> int:
     return level
 
 
+def resolve_log_level(
+    cli_value: str | None, config_level: int | None, env_level: int
+) -> int:
+    if cli_value is not None:
+        return parse_log_level(cli_value, name="log_level")
+    if config_level is not None:
+        return config_level
+    return env_level
+
+
 def _parse_log_level_env(
     name: str,
     default: int,
@@ -386,3 +458,188 @@ def _parse_log_level_env(
     if raw is None:
         return default
     return parse_log_level(raw, name=name)
+
+
+def resolve_depth(cli_value: int | None, config_value: int) -> int:
+    return config_value if cli_value is None else cli_value
+
+
+def _parse_app_config(raw: dict[str, Any]) -> AppConfig:
+    if not _has_config_sections(raw):
+        return _parse_legacy_detector_config(raw)
+
+    logging_section = _get_section(raw, "logging")
+    marketdata_section = _get_section(raw, "marketdata")
+    walls_section = _get_section(raw, "walls")
+    debug_section = _get_section(raw, "debug")
+
+    logging_config = _parse_logging_config(logging_section)
+    marketdata_config = _parse_marketdata_config(marketdata_section)
+    walls_config = _parse_walls_config(walls_section)
+    debug_config = _parse_debug_config(debug_section)
+    return AppConfig(
+        logging=logging_config,
+        marketdata=marketdata_config,
+        walls=walls_config,
+        debug=debug_config,
+    )
+
+
+def _has_config_sections(raw: dict[str, Any]) -> bool:
+    return any(key in raw for key in ("logging", "marketdata", "walls", "debug"))
+
+
+def _parse_legacy_detector_config(raw: dict[str, Any]) -> AppConfig:
+    if not raw:
+        return AppConfig()
+    try:
+        legacy = DetectorConfig(**raw)
+    except TypeError as exc:
+        raise ConfigError(f"Invalid config keys: {', '.join(raw.keys())}") from exc
+    return _app_config_from_detector(legacy)
+
+
+def _app_config_from_detector(legacy: DetectorConfig) -> AppConfig:
+    return AppConfig(
+        marketdata=MarketDataConfig(depth=legacy.depth),
+        walls=WallsConfig(
+            top_n_levels=legacy.vref_levels,
+            candidate_ratio_to_median=legacy.k_ratio,
+            candidate_max_distance_ticks=legacy.distance_ticks,
+            confirm_dwell_seconds=legacy.dwell_seconds,
+            confirm_max_distance_ticks=legacy.reposition_ticks,
+            consume_window_seconds=legacy.consuming_window_seconds,
+            consume_drop_pct=legacy.consuming_drop_pct * 100.0,
+            teleport_reset=legacy.teleport_reset,
+        ),
+        detector_defaults=legacy,
+    )
+
+
+def _get_section(raw: dict[str, Any], key: str) -> dict[str, Any]:
+    if key not in raw or raw[key] is None:
+        return {}
+    section = raw[key]
+    if not isinstance(section, dict):
+        raise ConfigError(f"{key} section must be a mapping")
+    return section
+
+
+def _parse_logging_config(raw: dict[str, Any]) -> LoggingConfig:
+    if not raw:
+        return LoggingConfig()
+    level = raw.get("level")
+    if level is None:
+        return LoggingConfig()
+    return LoggingConfig(level=_parse_log_level_value(level, "logging.level"))
+
+
+def _parse_marketdata_config(raw: dict[str, Any]) -> MarketDataConfig:
+    base = MarketDataConfig()
+    if not raw:
+        return base
+    depth = raw.get("depth", base.depth)
+    return MarketDataConfig(depth=_parse_int_value(depth, "marketdata.depth"))
+
+
+def _parse_walls_config(raw: dict[str, Any]) -> WallsConfig:
+    base = WallsConfig()
+    if not raw:
+        return base
+    return WallsConfig(
+        top_n_levels=_parse_int_value(
+            raw.get("top_n_levels", base.top_n_levels), "walls.top_n_levels"
+        ),
+        candidate_ratio_to_median=_parse_float_value(
+            raw.get("candidate_ratio_to_median", base.candidate_ratio_to_median),
+            "walls.candidate_ratio_to_median",
+        ),
+        candidate_max_distance_ticks=_parse_int_value(
+            raw.get("candidate_max_distance_ticks", base.candidate_max_distance_ticks),
+            "walls.candidate_max_distance_ticks",
+        ),
+        confirm_dwell_seconds=_parse_float_value(
+            raw.get("confirm_dwell_seconds", base.confirm_dwell_seconds),
+            "walls.confirm_dwell_seconds",
+        ),
+        confirm_max_distance_ticks=_parse_int_value(
+            raw.get("confirm_max_distance_ticks", base.confirm_max_distance_ticks),
+            "walls.confirm_max_distance_ticks",
+        ),
+        consume_window_seconds=_parse_float_value(
+            raw.get("consume_window_seconds", base.consume_window_seconds),
+            "walls.consume_window_seconds",
+        ),
+        consume_drop_pct=_parse_float_value(
+            raw.get("consume_drop_pct", base.consume_drop_pct),
+            "walls.consume_drop_pct",
+        ),
+        teleport_reset=_parse_bool_value_yaml(
+            raw.get("teleport_reset", base.teleport_reset),
+            "walls.teleport_reset",
+        ),
+    )
+
+
+def _parse_debug_config(raw: dict[str, Any]) -> DebugConfig:
+    base = DebugConfig()
+    if not raw:
+        return base
+    return DebugConfig(
+        walls_enabled=_parse_bool_value_yaml(
+            raw.get("walls_enabled", base.walls_enabled),
+            "debug.walls_enabled",
+        ),
+        walls_interval_seconds=_parse_float_value(
+            raw.get("walls_interval_seconds", base.walls_interval_seconds),
+            "debug.walls_interval_seconds",
+        ),
+    )
+
+
+def _parse_log_level_value(value: Any, name: str) -> int:
+    if isinstance(value, bool):
+        raise ConfigError(f"{name} must be a valid log level")
+    if isinstance(value, int):
+        if value < 0:
+            raise ConfigError(f"{name} must be a valid log level")
+        return value
+    if isinstance(value, str):
+        return parse_log_level(value, name=name)
+    raise ConfigError(f"{name} must be a string or integer")
+
+
+def _parse_int_value(value: Any, name: str) -> int:
+    if isinstance(value, bool):
+        raise ConfigError(f"{name} must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise ConfigError(f"{name} must be an integer") from exc
+    raise ConfigError(f"{name} must be an integer")
+
+
+def _parse_float_value(value: Any, name: str) -> float:
+    if isinstance(value, bool):
+        raise ConfigError(f"{name} must be a float")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise ConfigError(f"{name} must be a float") from exc
+    raise ConfigError(f"{name} must be a float")
+
+
+def _parse_bool_value_yaml(value: Any, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return _parse_bool_value(name, value)
+    raise ConfigError(f"{name} must be a boolean")

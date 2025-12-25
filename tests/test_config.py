@@ -5,7 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from wallwatch.app.config import CABundleError, ConfigError, EnvSettings, ensure_required_env, load_ca_bundle
+from wallwatch.app.config import (
+    CABundleError,
+    ConfigError,
+    EnvSettings,
+    ensure_required_env,
+    load_app_config,
+    load_ca_bundle,
+    resolve_depth,
+    resolve_log_level,
+)
 
 
 def _settings(**overrides: object) -> EnvSettings:
@@ -66,3 +75,43 @@ def test_ca_bundle_path_not_readable(tmp_path: Path) -> None:
     with pytest.raises(CABundleError, match="not readable"):
         load_ca_bundle(settings)
     ca_path.chmod(0o600)
+
+
+def test_load_app_config_from_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+logging:
+  level: DEBUG
+walls:
+  candidate_max_distance_ticks: 2
+  confirm_dwell_seconds: 3.0
+""".lstrip()
+    )
+
+    config = load_app_config(config_path)
+    detector_config = config.detector_config()
+
+    assert config.logging.level == 10
+    assert detector_config.distance_ticks == 2
+    assert detector_config.dwell_seconds == 3.0
+
+
+def test_cli_priority_overrides_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+logging:
+  level: DEBUG
+marketdata:
+  depth: 20
+""".lstrip()
+    )
+
+    config = load_app_config(config_path)
+
+    depth = resolve_depth(50, config.marketdata.depth)
+    log_level = resolve_log_level("INFO", config.logging.level, 20)
+
+    assert depth == 50
+    assert log_level == 20

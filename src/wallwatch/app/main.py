@@ -19,10 +19,11 @@ from wallwatch.app.config import (
     ConfigError,
     configure_grpc_root_certificates,
     ensure_required_env,
-    load_detector_config,
+    load_app_config,
     load_env_settings,
     missing_required_env,
-    parse_log_level,
+    resolve_depth,
+    resolve_log_level,
 )
 from wallwatch.detector.wall_detector import DetectorConfig, WallDetector
 from wallwatch.notify.notifier import ConsoleNotifier
@@ -72,12 +73,6 @@ class _JsonFormatter(logging.Formatter):
 DEFAULT_DOCTOR_SYMBOLS = ["SBER"]
 
 
-def _resolve_log_level(cli_value: str | None, env_level: int) -> int:
-    if cli_value is None:
-        return env_level
-    return parse_log_level(cli_value, name="log_level")
-
-
 def _load_dotenv() -> None:
     dotenv_path = find_dotenv(usecwd=True)
     if dotenv_path:
@@ -96,12 +91,13 @@ def _build_run_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--debug-walls",
         action="store_true",
+        default=None,
         help="Enable wall detector debug logs",
     )
     parser.add_argument(
         "--debug-walls-interval",
         type=float,
-        default=1.0,
+        default=None,
         help="Wall debug log interval in seconds (default: 1.0)",
     )
     parser.add_argument(
@@ -157,7 +153,13 @@ async def run_monitor_async(argv: list[str]) -> None:
         sys.exit(1)
 
     try:
-        log_level = _resolve_log_level(args.log_level, settings.log_level)
+        config = load_app_config(args.config)
+    except ConfigError as exc:
+        logger.error("config_error", extra={"error": str(exc)})
+        sys.exit(1)
+
+    try:
+        log_level = resolve_log_level(args.log_level, config.logging.level, settings.log_level)
     except ConfigError as exc:
         logger.error("config_error", extra={"error": str(exc)})
         sys.exit(1)
@@ -169,17 +171,15 @@ async def run_monitor_async(argv: list[str]) -> None:
         logger.error("config_error", extra={"error": str(exc)})
         sys.exit(1)
 
-    try:
-        config = load_detector_config(args.config)
-    except ConfigError as exc:
-        logger.error("config_error", extra={"error": str(exc)})
-        sys.exit(1)
-    if args.depth is not None:
-        config = DetectorConfig(**{**asdict(config), "depth": args.depth})
+    detector_config = config.detector_config()
+    depth = resolve_depth(args.depth, detector_config.depth)
+    detector_config = DetectorConfig(**{**asdict(detector_config), "depth": depth})
 
     symbols = _parse_symbols(args.symbols)
-    if len(symbols) > config.max_symbols:
-        symbols = symbols[: config.max_symbols]
+    if len(symbols) > detector_config.max_symbols:
+        symbols = symbols[: detector_config.max_symbols]
+
+    debug_enabled = config.debug.walls_enabled if args.debug_walls is None else args.debug_walls
 
     try:
         configure_grpc_root_certificates(settings, logger)
@@ -187,7 +187,7 @@ async def run_monitor_async(argv: list[str]) -> None:
         logger.error("config_error", extra={"error": str(exc)})
         sys.exit(1)
 
-    detector = WallDetector(config)
+    detector = WallDetector(detector_config)
     notifier = ConsoleNotifier(logger)
     client = MarketDataClient(
         token=settings.token or "",
@@ -226,7 +226,7 @@ async def run_monitor_async(argv: list[str]) -> None:
         extra={
             "pid": os.getpid(),
             "symbols": symbols,
-            "depth": config.depth,
+            "depth": detector_config.depth,
             "endpoint": _resolve_grpc_endpoint(),
         },
     )
@@ -292,9 +292,12 @@ async def run_monitor_async(argv: list[str]) -> None:
                     _mark_connected()
                     rx_orderbooks_last_interval += 1
                     rx_total_orderbooks += 1
-                    if args.debug_walls:
+                    if debug_enabled:
+                        debug_interval = args.debug_walls_interval
+                        if debug_interval is None:
+                            debug_interval = config.debug.walls_interval_seconds
                         alerts, debug_payload = detector.on_order_book_with_debug(
-                            snapshot, args.debug_walls_interval
+                            snapshot, debug_interval
                         )
                         if debug_payload is not None:
                             logger.info("wall_debug", extra=debug_payload)
@@ -310,7 +313,7 @@ async def run_monitor_async(argv: list[str]) -> None:
 
                 await client.stream_market_data(
                     instruments=resolved,
-                    depth=config.depth,
+                    depth=detector_config.depth,
                     on_order_book=_on_order_book,
                     on_trade=_on_trade,
                     on_alerts=lambda alerts: [notifier.notify(alert) for alert in alerts],
@@ -341,8 +344,16 @@ async def run_doctor_async(argv: list[str]) -> None:
         logger.error("config_error", extra={"error": str(exc)})
         sys.exit(1)
 
+    config = None
+    if args.config is not None:
+        try:
+            config = load_app_config(args.config)
+        except ConfigError:
+            config = None
+
     try:
-        log_level = _resolve_log_level(args.log_level, settings.log_level)
+        config_level = None if config is None else config.logging.level
+        log_level = resolve_log_level(args.log_level, config_level, settings.log_level)
     except ConfigError as exc:
         logger.error("config_error", extra={"error": str(exc)})
         sys.exit(1)
@@ -384,7 +395,7 @@ async def build_doctor_report(
             report.append(("env", True, "Required environment variables set"))
 
     try:
-        _ = load_detector_config(config_path)
+        _ = load_app_config(config_path)
         report.append(("config", True, "Config loaded"))
     except ConfigError as exc:
         report.append(("config", False, str(exc)))
