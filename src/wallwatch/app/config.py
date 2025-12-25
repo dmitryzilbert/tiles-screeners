@@ -31,12 +31,12 @@ class EnvSettings:
     retry_backoff_initial_seconds: float
     retry_backoff_max_seconds: float
     stream_idle_sleep_seconds: float
-    instrument_status: schemas.InstrumentStatus
     tg_bot_token: str | None
     tg_chat_ids: list[int]
     tg_allowed_user_ids: set[int]
     tg_polling: bool
     tg_parse_mode: str
+    instrument_status: schemas.InstrumentStatus = schemas.InstrumentStatus.INSTRUMENT_STATUS_BASE
 
 
 GRPC_ROOTS_ENV_VAR = "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"
