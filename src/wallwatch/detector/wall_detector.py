@@ -72,17 +72,39 @@ class WallDetector:
         return []
 
     def on_order_book(self, snapshot: OrderBookSnapshot) -> list[Alert]:
+        alerts, _ = self._process_order_book(snapshot, debug_interval=None)
+        return alerts
+
+    def on_order_book_with_debug(
+        self, snapshot: OrderBookSnapshot, debug_interval: float
+    ) -> tuple[list[Alert], dict[str, object] | None]:
+        return self._process_order_book(snapshot, debug_interval=debug_interval)
+
+    def _process_order_book(
+        self, snapshot: OrderBookSnapshot, debug_interval: float | None
+    ) -> tuple[list[Alert], dict[str, object] | None]:
         state = self._states.get(snapshot.instrument_id)
         if state is None:
-            return []
+            return [], None
         state.last_snapshot = snapshot
         self._cleanup_trades(state, snapshot.ts)
         alerts: list[Alert] = []
         candidate = self._find_candidate(snapshot, state.tick_size)
-        if candidate is None:
-            return alerts
+        debug_payload: dict[str, object] | None = None
 
-        wall = self._update_active_wall(state, candidate, snapshot.ts)
+        if candidate is None:
+            debug_payload = self._build_debug_payload(
+                state=state,
+                snapshot=snapshot,
+                candidate=None,
+                wall=None,
+                teleport_detected=False,
+                dwell_seconds=0.0,
+                debug_interval=debug_interval,
+            )
+            return alerts, debug_payload
+
+        wall, teleport_detected = self._update_active_wall(state, candidate, snapshot.ts)
         previous_size = wall.last_size
         wall.size_history.append((snapshot.ts, candidate.size))
         wall.last_size = candidate.size
@@ -135,7 +157,17 @@ class WallDetector:
             )
             wall.last_consuming_alert_ts = snapshot.ts
             alerts.append(alert)
-        return alerts
+
+        debug_payload = self._build_debug_payload(
+            state=state,
+            snapshot=snapshot,
+            candidate=candidate,
+            wall=wall,
+            teleport_detected=teleport_detected,
+            dwell_seconds=dwell_seconds,
+            debug_interval=debug_interval,
+        )
+        return alerts, debug_payload
 
     def _find_candidate(
         self, snapshot: OrderBookSnapshot, tick_size: float
@@ -191,11 +223,12 @@ class WallDetector:
 
     def _update_active_wall(
         self, state: InstrumentState, candidate: WallCandidate, ts: datetime
-    ) -> ActiveWall:
+    ) -> tuple[ActiveWall, bool]:
         wall = state.active_wall
         if wall and wall.side == candidate.side and wall.price == candidate.price:
-            return wall
+            return wall, False
         reposition_count = 0
+        teleport_detected = False
         if wall is not None:
             within_window = (ts - wall.last_seen).total_seconds() <= self._config.reposition_window_seconds
             if within_window:
@@ -204,6 +237,7 @@ class WallDetector:
                 size_similarity = abs(candidate.size - wall.last_size) / max(wall.last_size, 1e-9)
                 if price_delta <= max_delta and size_similarity <= self._config.reposition_similar_pct:
                     reposition_count = wall.reposition_count + 1
+                    teleport_detected = True
         new_wall = ActiveWall(
             side=candidate.side,
             price=candidate.price,
@@ -213,7 +247,82 @@ class WallDetector:
             reposition_count=reposition_count,
         )
         state.active_wall = new_wall
-        return new_wall
+        return new_wall, teleport_detected
+
+    def _build_debug_payload(
+        self,
+        *,
+        state: InstrumentState,
+        snapshot: OrderBookSnapshot,
+        candidate: WallCandidate | None,
+        wall: ActiveWall | None,
+        teleport_detected: bool,
+        dwell_seconds: float,
+        debug_interval: float | None,
+    ) -> dict[str, object] | None:
+        if debug_interval is None:
+            return None
+        if debug_interval <= 0:
+            debug_interval = 0.0
+        if state.last_debug_ts is not None:
+            elapsed = (snapshot.ts - state.last_debug_ts).total_seconds()
+            if elapsed < debug_interval:
+                return None
+        state.last_debug_ts = snapshot.ts
+
+        candidate_side = candidate.side.value if candidate else None
+        candidate_price = candidate.price if candidate else None
+        candidate_qty = candidate.size if candidate else None
+        qty_ratio_to_median = candidate.ratio if candidate else None
+        candidate_distance_ticks_to_spread = None
+        spread = None
+        if snapshot.best_bid is not None and snapshot.best_ask is not None:
+            spread = snapshot.best_ask - snapshot.best_bid
+            if candidate is not None:
+                if candidate.side == Side.BUY:
+                    candidate_distance_ticks_to_spread = int(
+                        round(abs(snapshot.best_ask - candidate.price) / state.tick_size)
+                    )
+                else:
+                    candidate_distance_ticks_to_spread = int(
+                        round(abs(candidate.price - snapshot.best_bid) / state.tick_size)
+                    )
+
+        qty_change_last_interval = 0.0
+        if candidate is not None:
+            if state.last_debug_candidate_size is not None:
+                qty_change_last_interval = candidate.size - state.last_debug_candidate_size
+            state.last_debug_candidate_size = candidate.size
+        else:
+            state.last_debug_candidate_size = None
+
+        debug_state = "NONE"
+        if candidate is not None and wall is not None:
+            if wall.confirmed_ts is not None:
+                drop_pct = self._consuming_drop_pct(wall, snapshot.ts)
+                debug_state = (
+                    "CONSUMING"
+                    if drop_pct >= self._config.consuming_drop_pct
+                    else "CONFIRMED"
+                )
+            else:
+                debug_state = "CANDIDATE"
+
+        return {
+            "symbol": state.symbol,
+            "best_bid": snapshot.best_bid,
+            "best_ask": snapshot.best_ask,
+            "spread": spread,
+            "candidate_side": candidate_side,
+            "candidate_price": candidate_price,
+            "candidate_qty": candidate_qty,
+            "candidate_distance_ticks_to_spread": candidate_distance_ticks_to_spread,
+            "qty_ratio_to_median": qty_ratio_to_median,
+            "dwell_seconds": round(dwell_seconds, 3),
+            "qty_change_last_interval": qty_change_last_interval,
+            "teleport_detected": teleport_detected,
+            "state": debug_state,
+        }
 
     def _cleanup_trades(self, state: InstrumentState, ts: datetime) -> None:
         window = timedelta(seconds=self._config.trades_window_seconds)
