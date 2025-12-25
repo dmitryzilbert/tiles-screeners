@@ -263,6 +263,13 @@ class MarketDataClient:
         ]
 
         async def _iter() -> AsyncIterator[MarketDataRequest]:
+            self._logger.info(
+                "subscribed",
+                extra={
+                    "order_books": len(order_books),
+                    "trades": len(trades),
+                },
+            )
             yield MarketDataRequest(
                 subscribe_order_book_request=SubscribeOrderBookRequest(
                     subscription_action=SubscriptionAction.SUBSCRIPTION_ACTION_SUBSCRIBE,

@@ -84,6 +84,7 @@ def test_run_monitor_async_windows_skips_signal_handlers(
 
     settings = SimpleNamespace(
         token="token",
+        log_level=20,
         retry_backoff_initial_seconds=0.0,
         retry_backoff_max_seconds=0.0,
         stream_idle_sleep_seconds=0.0,

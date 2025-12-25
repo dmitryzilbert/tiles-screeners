@@ -6,6 +6,7 @@ import importlib.metadata
 import importlib.util
 import logging
 import signal
+import sys
 from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from wallwatch.app.config import (
     ensure_required_env,
     load_detector_config,
     load_env_settings,
+    parse_log_level,
 )
 from wallwatch.app.main import _configure_logger, build_doctor_report
 from wallwatch.detector.wall_detector import DetectorConfig, WallDetector
@@ -51,9 +53,13 @@ def _parse_symbols(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def _ensure_telegram_dependency() -> None:
+def _ensure_telegram_dependency(logger: logging.Logger) -> None:
     if importlib.util.find_spec("telegram") is None:
-        raise SystemExit("Telegram support not installed. Install with: pip install -e '.[telegram]'")
+        logger.error(
+            "missing_dependency",
+            extra={"error": "Telegram support not installed. Install with: pip install -e '.[telegram]'"},
+        )
+        sys.exit(1)
 
 
 def _ensure_telegram_env(settings: Any) -> None:
@@ -238,34 +244,58 @@ async def run_telegram_async(argv: list[str]) -> None:
     parser.add_argument("--symbols", default="", help="Comma separated symbols/ISINs")
     parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--config", type=Path, default=None)
+    parser.add_argument(
+        "--log-level",
+        default=None,
+        help="Log level (default: INFO, env: log_level)",
+    )
     args = parser.parse_args(argv)
 
+    logger = _configure_logger(logging.INFO)
     try:
         settings = load_env_settings()
+    except ConfigError as exc:
+        logger.error("config_error", extra={"error": str(exc)})
+        sys.exit(1)
+
+    try:
+        log_level = settings.log_level if args.log_level is None else parse_log_level(args.log_level)
+    except ConfigError as exc:
+        logger.error("config_error", extra={"error": str(exc)})
+        sys.exit(1)
+    logger.setLevel(log_level)
+
+    try:
         ensure_required_env(settings)
         _ensure_telegram_env(settings)
     except ConfigError as exc:
-        raise SystemExit(str(exc)) from exc
+        logger.error("config_error", extra={"error": str(exc)})
+        sys.exit(1)
 
     if not settings.tg_polling:
-        raise SystemExit("tg_polling=false is not supported in CLI mode")
+        logger.error(
+            "config_error",
+            extra={"error": "tg_polling=false is not supported in CLI mode"},
+        )
+        sys.exit(1)
 
     try:
         config = load_detector_config(args.config)
     except ConfigError as exc:
-        raise SystemExit(str(exc)) from exc
+        logger.error("config_error", extra={"error": str(exc)})
+        sys.exit(1)
     if args.depth is not None:
         config = DetectorConfig(**{**asdict(config), "depth": args.depth})
 
-    _ensure_telegram_dependency()
+    _ensure_telegram_dependency(logger)
     from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
     from telegram import Update
 
-    logger = _configure_logger()
     try:
         configure_grpc_root_certificates(settings, logger)
     except CABundleError as exc:
-        raise SystemExit(str(exc)) from exc
+        logger.error("config_error", extra={"error": str(exc)})
+        sys.exit(1)
 
     bot = ApplicationBuilder().token(settings.tg_bot_token or "").build()
     notifier = TelegramNotifier(
