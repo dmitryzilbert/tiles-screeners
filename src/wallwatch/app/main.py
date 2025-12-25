@@ -94,6 +94,17 @@ def _build_run_parser() -> argparse.ArgumentParser:
     parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument(
+        "--debug-walls",
+        action="store_true",
+        help="Enable wall detector debug logs",
+    )
+    parser.add_argument(
+        "--debug-walls-interval",
+        type=float,
+        default=1.0,
+        help="Wall debug log interval in seconds (default: 1.0)",
+    )
+    parser.add_argument(
         "--log-level",
         default=None,
         help="Log level (default: INFO, env: log_level)",
@@ -281,6 +292,13 @@ async def run_monitor_async(argv: list[str]) -> None:
                     _mark_connected()
                     rx_orderbooks_last_interval += 1
                     rx_total_orderbooks += 1
+                    if args.debug_walls:
+                        alerts, debug_payload = detector.on_order_book_with_debug(
+                            snapshot, args.debug_walls_interval
+                        )
+                        if debug_payload is not None:
+                            logger.info("wall_debug", extra=debug_payload)
+                        return alerts
                     return detector.on_order_book(snapshot)
 
                 def _on_trade(trade: Trade) -> list[Alert]:

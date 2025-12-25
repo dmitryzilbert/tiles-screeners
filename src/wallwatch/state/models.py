@@ -88,3 +88,5 @@ class InstrumentState:
     last_snapshot: Optional[OrderBookSnapshot] = None
     trades: Deque[Trade] = field(default_factory=deque)
     active_wall: Optional[ActiveWall] = None
+    last_debug_ts: Optional[datetime] = None
+    last_debug_candidate_size: Optional[float] = None
