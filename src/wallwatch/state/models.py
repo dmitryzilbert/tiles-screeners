@@ -93,6 +93,8 @@ class InstrumentState:
     active_wall: Optional[ActiveWall] = None
     last_debug_ts: Optional[datetime] = None
     last_debug_candidate_size: Optional[float] = None
+    last_event_state: str = "NONE"
+    last_event_wall_key: Optional[str] = None
 
 
 @dataclass
@@ -102,21 +104,33 @@ class WallEvent:
     side: Side
     price: float
     qty: float
+    wall_key: str
+    distance_ticks_to_spread: Optional[int]
     distance_ticks: int
     ratio_to_median: float
     dwell_seconds: float
+    qty_change_last_interval: float
+    thresholds: Optional[dict[str, float | int]] = None
+    timestamp: Optional[datetime] = None
     reason: Optional[str] = None
 
     def to_log_extra(self) -> dict[str, object]:
         payload: dict[str, object] = {
             "symbol": self.symbol,
+            "wall_key": self.wall_key,
             "side": self.side,
             "price": self.price,
             "qty": self.qty,
+            "distance_ticks_to_spread": self.distance_ticks_to_spread,
             "distance_ticks": self.distance_ticks,
             "ratio_to_median": self.ratio_to_median,
             "dwell_seconds": self.dwell_seconds,
+            "qty_change_last_interval": self.qty_change_last_interval,
         }
+        if self.thresholds is not None:
+            payload["thresholds"] = self.thresholds
+        if self.timestamp is not None:
+            payload["timestamp"] = self.timestamp.isoformat()
         if self.reason is not None:
             payload["reason"] = self.reason
         return payload

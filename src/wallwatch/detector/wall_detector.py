@@ -104,17 +104,34 @@ class WallDetector:
         if candidate is None:
             if state.active_wall is not None:
                 wall = state.active_wall
-                reason = self._resolve_lost_reason(snapshot, wall, teleport_detected=False)
-                events.append(
-                    self._build_wall_event(
-                        state=state,
-                        wall=wall,
-                        qty=wall.last_size,
-                        dwell_seconds=(snapshot.ts - wall.first_seen).total_seconds(),
-                        event="wall_lost",
-                        reason=reason,
-                    )
+                reason = self._resolve_lost_reason(
+                    snapshot,
+                    wall,
+                    teleport_detected=False,
+                    candidate=None,
+                    ratio_ok=None,
+                    distance_ok=None,
+                    topn_ok=None,
+                    tick_size=state.tick_size,
                 )
+                if (
+                    state.last_event_state != "NONE"
+                    and state.last_event_wall_key == self._wall_key(wall)
+                ):
+                    events.append(
+                        self._build_wall_event(
+                            state=state,
+                            wall=wall,
+                            qty=wall.last_size,
+                            dwell_seconds=(snapshot.ts - wall.first_seen).total_seconds(),
+                            event="wall_lost",
+                            reason=reason,
+                            qty_change_last_interval=0.0,
+                            snapshot=snapshot,
+                        )
+                    )
+                state.last_event_state = "NONE"
+                state.last_event_wall_key = None
                 state.active_wall = None
             debug_payload = self._build_debug_payload(
                 state=state,
@@ -133,36 +150,105 @@ class WallDetector:
         wall.ratio_to_median = candidate.ratio
         if previous_wall is None or previous_wall is not wall:
             if previous_wall is not None:
-                reason = self._resolve_lost_reason(snapshot, previous_wall, teleport_detected)
-                events.append(
-                    self._build_wall_event(
-                        state=state,
-                        wall=previous_wall,
-                        qty=previous_wall.last_size,
-                        dwell_seconds=(snapshot.ts - previous_wall.first_seen).total_seconds(),
-                        event="wall_lost",
-                        reason=reason,
+                reason = self._resolve_lost_reason(
+                    snapshot,
+                    previous_wall,
+                    teleport_detected,
+                    candidate=None,
+                    ratio_ok=None,
+                    distance_ok=None,
+                    topn_ok=None,
+                    tick_size=state.tick_size,
+                )
+                if (
+                    state.last_event_state != "NONE"
+                    and state.last_event_wall_key == self._wall_key(previous_wall)
+                ):
+                    events.append(
+                        self._build_wall_event(
+                            state=state,
+                            wall=previous_wall,
+                            qty=previous_wall.last_size,
+                            dwell_seconds=(snapshot.ts - previous_wall.first_seen).total_seconds(),
+                            event="wall_lost",
+                            reason=reason,
+                            qty_change_last_interval=0.0,
+                            snapshot=snapshot,
+                        )
                     )
-                )
-            events.append(
-                self._build_wall_event(
-                    state=state,
-                    wall=wall,
-                    qty=candidate.size,
-                    dwell_seconds=(snapshot.ts - wall.first_seen).total_seconds(),
-                    event="wall_candidate",
-                )
-            )
+                state.last_event_state = "NONE"
+                state.last_event_wall_key = None
         previous_size = wall.last_size
         wall.size_history.append((snapshot.ts, candidate.size))
         wall.last_size = candidate.size
         wall.last_seen = snapshot.ts
 
         dwell_seconds = (snapshot.ts - wall.first_seen).total_seconds()
+        qty_change_last_interval = candidate.size - previous_size
         executed_at_wall = self._executed_volume_at_price(state, candidate.price)
         size_drop = max(previous_size - candidate.size, 0.0)
         cancel_share = self._cancel_share(executed_at_wall, size_drop)
         absorption_score = executed_at_wall / max(candidate.size, 1e-9)
+
+        (
+            event_state,
+            candidate_ok,
+            confirm_ok,
+            consume_ok,
+            ratio_ok,
+            distance_ok,
+            topn_ok,
+        ) = self._evaluate_event_state(snapshot, candidate, wall, dwell_seconds)
+        wall_key = self._wall_key(wall)
+        if event_state == "NONE":
+            if (
+                state.last_event_state != "NONE"
+                and state.last_event_wall_key == wall_key
+            ):
+                reason = self._resolve_lost_reason(
+                    snapshot,
+                    wall,
+                    teleport_detected=False,
+                    candidate=candidate,
+                    ratio_ok=ratio_ok,
+                    distance_ok=distance_ok,
+                    topn_ok=topn_ok,
+                    tick_size=state.tick_size,
+                )
+                events.append(
+                    self._build_wall_event(
+                        state=state,
+                        wall=wall,
+                        qty=candidate.size,
+                        dwell_seconds=dwell_seconds,
+                        event="wall_lost",
+                        reason=reason,
+                        qty_change_last_interval=qty_change_last_interval,
+                        snapshot=snapshot,
+                    )
+                )
+            state.last_event_state = "NONE"
+            state.last_event_wall_key = None
+        else:
+            if state.last_event_state != event_state or state.last_event_wall_key != wall_key:
+                event_name = {
+                    "CANDIDATE": "wall_candidate",
+                    "CONFIRMED": "wall_confirmed",
+                    "CONSUMING": "wall_consuming",
+                }[event_state]
+                events.append(
+                    self._build_wall_event(
+                        state=state,
+                        wall=wall,
+                        qty=candidate.size,
+                        dwell_seconds=dwell_seconds,
+                        event=event_name,
+                        qty_change_last_interval=qty_change_last_interval,
+                        snapshot=snapshot,
+                    )
+                )
+            state.last_event_state = event_state
+            state.last_event_wall_key = wall_key
 
         should_confirm = self._should_confirm(
             wall,
@@ -174,16 +260,6 @@ class WallDetector:
             snapshot.ts,
         )
         if should_confirm:
-            if wall.confirmed_ts is None:
-                events.append(
-                    self._build_wall_event(
-                        state=state,
-                        wall=wall,
-                        qty=candidate.size,
-                        dwell_seconds=dwell_seconds,
-                        event="wall_confirmed",
-                    )
-                )
             alert = self._build_alert(
                 snapshot,
                 candidate,
@@ -205,15 +281,6 @@ class WallDetector:
         )
         if should_consuming:
             if wall.consuming_ts is None:
-                events.append(
-                    self._build_wall_event(
-                        state=state,
-                        wall=wall,
-                        qty=candidate.size,
-                        dwell_seconds=dwell_seconds,
-                        event="wall_consuming",
-                    )
-                )
                 wall.consuming_ts = snapshot.ts
             reasons = [
                 f"drop>={self._config.consuming_drop_pct:.2f}",
@@ -327,12 +394,41 @@ class WallDetector:
         return new_wall, teleport_detected
 
     def _resolve_lost_reason(
-        self, snapshot: OrderBookSnapshot, wall: ActiveWall, teleport_detected: bool
+        self,
+        snapshot: OrderBookSnapshot,
+        wall: ActiveWall,
+        teleport_detected: bool,
+        candidate: WallCandidate | None,
+        ratio_ok: bool | None,
+        distance_ok: bool | None,
+        topn_ok: bool | None,
+        tick_size: float | None,
     ) -> str:
         if teleport_detected:
             return "teleport"
         level_qty = self._find_level_quantity(snapshot, wall.side, wall.price)
-        return "disappear" if level_qty is None else "cancel"
+        if candidate is not None:
+            if distance_ok is False:
+                return "distance_exceeded"
+            if ratio_ok is False:
+                return "ratio_below"
+            if topn_ok is False:
+                return "other"
+        if level_qty is None:
+            return "disappeared"
+        distance_ticks = self._distance_ticks_to_spread(
+            snapshot, wall.side, wall.price, tick_size=tick_size
+        )
+        if distance_ticks is not None and distance_ticks > self._config.distance_ticks:
+            return "distance_exceeded"
+        ratio = self._level_ratio(snapshot, wall.side, wall.price)
+        if ratio is not None and ratio < self._config.k_ratio and (
+            level_qty < self._config.abs_qty_threshold or self._config.abs_qty_threshold <= 0
+        ):
+            return "ratio_below"
+        if level_qty < wall.last_size:
+            return "cancel_suspected"
+        return "other"
 
     def _find_level_quantity(
         self, snapshot: OrderBookSnapshot, side: Side, price: float
@@ -351,17 +447,27 @@ class WallDetector:
         qty: float,
         dwell_seconds: float,
         event: str,
+        qty_change_last_interval: float,
+        snapshot: OrderBookSnapshot,
         reason: str | None = None,
     ) -> WallEvent:
+        wall_key = self._wall_key(wall)
         return WallEvent(
             event=event,
             symbol=state.symbol,
             side=wall.side,
             price=wall.price,
             qty=qty,
+            wall_key=wall_key,
+            distance_ticks_to_spread=self._distance_ticks_to_spread(
+                snapshot, wall.side, wall.price, tick_size=state.tick_size
+            ),
             distance_ticks=wall.distance_ticks,
             ratio_to_median=wall.ratio_to_median,
             dwell_seconds=dwell_seconds,
+            qty_change_last_interval=qty_change_last_interval,
+            thresholds=self._event_thresholds(),
+            timestamp=snapshot.ts,
             reason=reason,
         )
 
@@ -482,6 +588,80 @@ class WallDetector:
             },
             "state": debug_state,
         }
+
+    def _event_thresholds(self) -> dict[str, float | int]:
+        return {
+            "candidate_ratio_to_median": self._config.k_ratio,
+            "candidate_max_distance_ticks": self._config.distance_ticks,
+            "top_n_levels": self._config.vref_levels,
+            "confirm_dwell_seconds": self._config.dwell_seconds,
+            "confirm_max_distance_ticks": self._config.reposition_ticks,
+            "consume_window_seconds": self._config.consuming_window_seconds,
+            "consume_drop_pct": self._config.consuming_drop_pct,
+        }
+
+    def _wall_key(self, wall: ActiveWall) -> str:
+        return f"{wall.side.value}@{wall.price}"
+
+    def _distance_ticks_to_spread(
+        self,
+        snapshot: OrderBookSnapshot,
+        side: Side,
+        price: float,
+        tick_size: float | None,
+    ) -> int | None:
+        if snapshot.best_bid is None or snapshot.best_ask is None:
+            return None
+        if tick_size is None or tick_size <= 0:
+            return None
+        if side == Side.BUY:
+            return int(round(abs(snapshot.best_ask - price) / tick_size))
+        return int(round(abs(price - snapshot.best_bid) / tick_size))
+
+    def _level_ratio(
+        self, snapshot: OrderBookSnapshot, side: Side, price: float
+    ) -> float | None:
+        levels = snapshot.bids if side == Side.BUY else snapshot.asks
+        level = next((item for item in levels if item.price == price), None)
+        if level is None:
+            return None
+        v_ref = self._median_volume(levels[: self._config.vref_levels])
+        if v_ref <= 0:
+            return 0.0
+        return level.quantity / v_ref
+
+    def _evaluate_event_state(
+        self,
+        snapshot: OrderBookSnapshot,
+        candidate: WallCandidate,
+        wall: ActiveWall,
+        dwell_seconds: float,
+    ) -> tuple[str, bool, bool, bool, bool, bool, bool]:
+        ratio_ok = candidate.ratio >= self._config.k_ratio
+        distance_ok = candidate.distance_ticks <= self._config.distance_ticks
+        levels = snapshot.bids if candidate.side == Side.BUY else snapshot.asks
+        candidate_index = next(
+            (index for index, level in enumerate(levels) if level.price == candidate.price),
+            None,
+        )
+        topn_ok = candidate_index is not None and candidate_index < self._config.vref_levels
+        candidate_ok = ratio_ok and distance_ok and topn_ok
+        confirm_ok = (
+            candidate_ok
+            and dwell_seconds >= self._config.dwell_seconds
+            and wall.distance_ticks <= self._config.reposition_ticks
+        )
+        drop_pct = self._consuming_drop_pct(wall, snapshot.ts)
+        consume_ok = confirm_ok and drop_pct >= self._config.consuming_drop_pct
+        if consume_ok:
+            state = "CONSUMING"
+        elif confirm_ok:
+            state = "CONFIRMED"
+        elif candidate_ok:
+            state = "CANDIDATE"
+        else:
+            state = "NONE"
+        return state, candidate_ok, confirm_ok, consume_ok, ratio_ok, distance_ok, topn_ok
 
     def _cleanup_trades(self, state: InstrumentState, ts: datetime) -> None:
         window = timedelta(seconds=self._config.trades_window_seconds)
