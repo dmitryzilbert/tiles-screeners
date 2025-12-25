@@ -172,25 +172,31 @@ async def run_monitor_async(argv: list[str]) -> None:
         stop_event.set()
 
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _handle_signal)
+    if sys.platform != "win32":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, _handle_signal)
 
     backoff = settings.retry_backoff_initial_seconds
-    while not stop_event.is_set():
-        try:
-            await client.stream_market_data(
-                instruments=resolved,
-                depth=config.depth,
-                on_order_book=detector.on_order_book,
-                on_trade=detector.on_trade,
-                on_alerts=lambda alerts: [notifier.notify(alert) for alert in alerts],
-                stop_event=stop_event,
-            )
-            backoff = settings.retry_backoff_initial_seconds
-        except Exception as exc:  # noqa: BLE001
-            logger.error("stream_failed", extra={"error": str(exc)})
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, settings.retry_backoff_max_seconds)
+    try:
+        while not stop_event.is_set():
+            try:
+                await client.stream_market_data(
+                    instruments=resolved,
+                    depth=config.depth,
+                    on_order_book=detector.on_order_book,
+                    on_trade=detector.on_trade,
+                    on_alerts=lambda alerts: [notifier.notify(alert) for alert in alerts],
+                    stop_event=stop_event,
+                )
+                backoff = settings.retry_backoff_initial_seconds
+            except Exception as exc:  # noqa: BLE001
+                logger.error("stream_failed", extra={"error": str(exc)})
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, settings.retry_backoff_max_seconds)
+    except KeyboardInterrupt:
+        logger.info("shutdown_requested")
+    finally:
+        stop_event.set()
 
 
 async def run_doctor_async(argv: list[str]) -> None:
