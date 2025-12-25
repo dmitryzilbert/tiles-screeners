@@ -67,6 +67,14 @@ def _timestamp_to_datetime(value) -> datetime:
     return value.ToDatetime().astimezone(timezone.utc) if value else _now_utc()
 
 
+def get_msg_instrument_key(msg) -> str | None:
+    return (
+        getattr(msg, "instrument_uid", None)
+        or getattr(msg, "figi", None)
+        or getattr(msg, "instrument_id", None)
+    )
+
+
 class MarketDataClient:
     def __init__(
         self,
@@ -123,7 +131,8 @@ class MarketDataClient:
         full_response = await service.get_instrument_by(id_type=id_type, id=instrument_id)
         full_instrument = full_response.instrument
         tick_size = self._resolve_tick_size(symbol, full_instrument)
-        return InstrumentInfo(instrument_id=instrument_id, symbol=symbol, tick_size=tick_size)
+        resolved_id = getattr(full_instrument, "uid", None) or instrument_id
+        return InstrumentInfo(instrument_id=resolved_id, symbol=symbol, tick_size=tick_size)
 
     async def _find_instrument(
         self, service: InstrumentsService, symbol: str
@@ -242,14 +251,16 @@ class MarketDataClient:
                     break
                 if response.orderbook:
                     snapshot = self._map_order_book(response.orderbook)
-                    alerts = on_order_book(snapshot)
-                    if alerts:
-                        on_alerts(alerts)
+                    if snapshot is not None:
+                        alerts = on_order_book(snapshot)
+                        if alerts:
+                            on_alerts(alerts)
                 if response.trade:
                     trade = self._map_trade(response.trade)
-                    alerts = on_trade(trade)
-                    if alerts:
-                        on_alerts(alerts)
+                    if trade is not None:
+                        alerts = on_trade(trade)
+                        if alerts:
+                            on_alerts(alerts)
 
     def _subscription_requests(
         self, instruments: list[InstrumentInfo], depth: int
@@ -287,7 +298,11 @@ class MarketDataClient:
 
         return _iter()
 
-    def _map_order_book(self, orderbook) -> OrderBookSnapshot:
+    def _map_order_book(self, orderbook) -> OrderBookSnapshot | None:
+        instrument_id = get_msg_instrument_key(orderbook)
+        if not instrument_id:
+            self._logger.warning("orderbook_instrument_missing")
+            return None
         bids = [
             OrderBookLevel(
                 price=_quotation_to_float(level.price),
@@ -305,7 +320,7 @@ class MarketDataClient:
         best_bid = bids[0].price if bids else None
         best_ask = asks[0].price if asks else None
         return OrderBookSnapshot(
-            instrument_id=orderbook.instrument_id,
+            instrument_id=instrument_id,
             bids=bids,
             asks=asks,
             best_bid=best_bid,
@@ -313,10 +328,14 @@ class MarketDataClient:
             ts=_timestamp_to_datetime(orderbook.time),
         )
 
-    def _map_trade(self, trade) -> Trade:
+    def _map_trade(self, trade) -> Trade | None:
+        instrument_id = get_msg_instrument_key(trade)
+        if not instrument_id:
+            self._logger.warning("trade_instrument_missing")
+            return None
         side = Side.BUY if trade.direction == 1 else Side.SELL if trade.direction == 2 else None
         return Trade(
-            instrument_id=trade.instrument_id,
+            instrument_id=instrument_id,
             price=_quotation_to_float(trade.price),
             quantity=float(trade.quantity),
             side=side,
