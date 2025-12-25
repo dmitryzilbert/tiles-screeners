@@ -275,6 +275,18 @@ class MarketDataClient:
                 self._logger.info({"message": "shutdown", "reason": "cancelled"})
                 return
 
+    async def get_order_book(
+        self,
+        instrument_id: str,
+        depth: int,
+    ) -> OrderBookSnapshot | None:
+        async with self._client() as client:
+            response = await client.market_data.get_order_book(
+                instrument_id=instrument_id,
+                depth=depth,
+            )
+        return self._map_order_book(response)
+
     def _subscription_requests(
         self, instruments: list[InstrumentInfo], depth: int
     ) -> AsyncIterator[MarketDataRequest]:
@@ -332,7 +344,7 @@ class MarketDataClient:
         ]
         best_bid = bids[0].price if bids else None
         best_ask = asks[0].price if asks else None
-        ts = to_datetime(orderbook.time)
+        ts = to_datetime(getattr(orderbook, "time", None) or getattr(orderbook, "orderbook_ts", None))
         if ts is None:
             self._logger.warning(
                 "orderbook_time_missing",

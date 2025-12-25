@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import find_dotenv, load_dotenv
-from wallwatch.api.client import MarketDataClient, _resolve_grpc_endpoint
+from wallwatch.api.client import InstrumentInfo, MarketDataClient, _resolve_grpc_endpoint
 from wallwatch.app.config import (
     CABundleError,
     ConfigError,
@@ -93,6 +93,24 @@ def _build_run_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols", required=True, help="Comma separated symbols/ISINs")
     parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--config", type=Path, default=None)
+    parser.add_argument(
+        "--dump-book",
+        action="store_true",
+        default=False,
+        help="Periodically dump order books via unary requests",
+    )
+    parser.add_argument(
+        "--dump-book-interval",
+        type=float,
+        default=2.0,
+        help="Order book dump interval in seconds (default: 2.0)",
+    )
+    parser.add_argument(
+        "--dump-book-levels",
+        type=int,
+        default=10,
+        help="Order book dump depth levels (default: 10)",
+    )
     parser.add_argument(
         "--debug-walls",
         action="store_true",
@@ -213,6 +231,9 @@ async def run_monitor_async(argv: list[str]) -> None:
             "walls.consume_window_seconds": config.walls.consume_window_seconds,
             "walls.consume_drop_pct": config.walls.consume_drop_pct,
             "walls.teleport_reset": config.walls.teleport_reset,
+            "dump.book_enabled": args.dump_book,
+            "dump.book_interval_seconds": args.dump_book_interval,
+            "dump.book_levels": args.dump_book_levels,
         },
     )
 
@@ -298,6 +319,18 @@ async def run_monitor_async(argv: list[str]) -> None:
             rx_trades_last_interval = 0
 
     heartbeat_task = asyncio.create_task(_heartbeat())
+    dump_task = None
+    if args.dump_book:
+        dump_task = asyncio.create_task(
+            _run_orderbook_dump(
+                client=client,
+                instruments=resolved,
+                depth=args.dump_book_levels,
+                interval=args.dump_book_interval,
+                logger=logger,
+                stop_event=stop_event,
+            )
+        )
 
     backoff = settings.retry_backoff_initial_seconds
     try:
@@ -363,6 +396,65 @@ async def run_monitor_async(argv: list[str]) -> None:
     finally:
         stop_event.set()
         heartbeat_task.cancel()
+        if dump_task is not None:
+            dump_task.cancel()
+
+
+async def _run_orderbook_dump(
+    client: MarketDataClient,
+    instruments: list[InstrumentInfo],
+    depth: int,
+    interval: float,
+    logger: logging.Logger,
+    stop_event: asyncio.Event,
+) -> None:
+    while not stop_event.is_set():
+        cycle_started = time.monotonic()
+        for instrument in instruments:
+            if stop_event.is_set():
+                break
+            try:
+                snapshot = await client.get_order_book(
+                    instrument_id=instrument.instrument_id,
+                    depth=depth,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "orderbook_dump_failed",
+                    extra={"symbol": instrument.symbol, "error": str(exc)},
+                )
+                continue
+            if snapshot is None:
+                continue
+            best_bid = snapshot.best_bid
+            best_ask = snapshot.best_ask
+            spread = None
+            if best_bid is not None and best_ask is not None:
+                spread = best_ask - best_bid
+            logger.info(
+                "orderbook_dump",
+                extra={
+                    "symbol": instrument.symbol,
+                    "best_bid": best_bid,
+                    "best_ask": best_ask,
+                    "spread": spread,
+                    "bids": [
+                        {"price": level.price, "qty": level.quantity}
+                        for level in snapshot.bids[:depth]
+                    ],
+                    "asks": [
+                        {"price": level.price, "qty": level.quantity}
+                        for level in snapshot.asks[:depth]
+                    ],
+                },
+            )
+        elapsed = time.monotonic() - cycle_started
+        remaining = interval - elapsed
+        if remaining > 0:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=remaining)
+            except asyncio.TimeoutError:
+                continue
 
 
 async def run_doctor_async(argv: list[str]) -> None:
