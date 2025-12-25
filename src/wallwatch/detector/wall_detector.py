@@ -15,6 +15,7 @@ from wallwatch.state.models import (
     Side,
     Trade,
     WallCandidate,
+    WallEvent,
 )
 
 
@@ -73,27 +74,48 @@ class WallDetector:
         return []
 
     def on_order_book(self, snapshot: OrderBookSnapshot) -> list[Alert]:
-        alerts, _ = self._process_order_book(snapshot, debug_interval=None)
+        alerts, _, _ = self._process_order_book(snapshot, debug_interval=None)
         return alerts
 
     def on_order_book_with_debug(
         self, snapshot: OrderBookSnapshot, debug_interval: float
-    ) -> tuple[list[Alert], dict[str, object] | None]:
+    ) -> tuple[list[Alert], dict[str, object] | None, list[WallEvent]]:
         return self._process_order_book(snapshot, debug_interval=debug_interval)
+
+    def on_order_book_with_events(
+        self, snapshot: OrderBookSnapshot
+    ) -> tuple[list[Alert], list[WallEvent]]:
+        alerts, _, events = self._process_order_book(snapshot, debug_interval=None)
+        return alerts, events
 
     def _process_order_book(
         self, snapshot: OrderBookSnapshot, debug_interval: float | None
-    ) -> tuple[list[Alert], dict[str, object] | None]:
+    ) -> tuple[list[Alert], dict[str, object] | None, list[WallEvent]]:
         state = self._states.get(snapshot.instrument_id)
         if state is None:
-            return [], None
+            return [], None, []
         state.last_snapshot = snapshot
         self._cleanup_trades(state, snapshot.ts)
         alerts: list[Alert] = []
         candidate = self._find_candidate(snapshot, state.tick_size)
         debug_payload: dict[str, object] | None = None
+        events: list[WallEvent] = []
 
         if candidate is None:
+            if state.active_wall is not None:
+                wall = state.active_wall
+                reason = self._resolve_lost_reason(snapshot, wall, teleport_detected=False)
+                events.append(
+                    self._build_wall_event(
+                        state=state,
+                        wall=wall,
+                        qty=wall.last_size,
+                        dwell_seconds=(snapshot.ts - wall.first_seen).total_seconds(),
+                        event="wall_lost",
+                        reason=reason,
+                    )
+                )
+                state.active_wall = None
             debug_payload = self._build_debug_payload(
                 state=state,
                 snapshot=snapshot,
@@ -103,9 +125,34 @@ class WallDetector:
                 dwell_seconds=0.0,
                 debug_interval=debug_interval,
             )
-            return alerts, debug_payload
+            return alerts, debug_payload, events
 
+        previous_wall = state.active_wall
         wall, teleport_detected = self._update_active_wall(state, candidate, snapshot.ts)
+        wall.distance_ticks = candidate.distance_ticks
+        wall.ratio_to_median = candidate.ratio
+        if previous_wall is None or previous_wall is not wall:
+            if previous_wall is not None:
+                reason = self._resolve_lost_reason(snapshot, previous_wall, teleport_detected)
+                events.append(
+                    self._build_wall_event(
+                        state=state,
+                        wall=previous_wall,
+                        qty=previous_wall.last_size,
+                        dwell_seconds=(snapshot.ts - previous_wall.first_seen).total_seconds(),
+                        event="wall_lost",
+                        reason=reason,
+                    )
+                )
+            events.append(
+                self._build_wall_event(
+                    state=state,
+                    wall=wall,
+                    qty=candidate.size,
+                    dwell_seconds=(snapshot.ts - wall.first_seen).total_seconds(),
+                    event="wall_candidate",
+                )
+            )
         previous_size = wall.last_size
         wall.size_history.append((snapshot.ts, candidate.size))
         wall.last_size = candidate.size
@@ -117,7 +164,7 @@ class WallDetector:
         cancel_share = self._cancel_share(executed_at_wall, size_drop)
         absorption_score = executed_at_wall / max(candidate.size, 1e-9)
 
-        if self._should_confirm(
+        should_confirm = self._should_confirm(
             wall,
             dwell_seconds,
             executed_at_wall,
@@ -125,7 +172,18 @@ class WallDetector:
             absorption_score,
             size_drop,
             snapshot.ts,
-        ):
+        )
+        if should_confirm:
+            if wall.confirmed_ts is None:
+                events.append(
+                    self._build_wall_event(
+                        state=state,
+                        wall=wall,
+                        qty=candidate.size,
+                        dwell_seconds=dwell_seconds,
+                        event="wall_confirmed",
+                    )
+                )
             alert = self._build_alert(
                 snapshot,
                 candidate,
@@ -142,7 +200,21 @@ class WallDetector:
             wall.last_confirm_alert_ts = snapshot.ts
             alerts.append(alert)
 
-        if self._should_consuming(wall, snapshot.ts, executed_at_wall, cancel_share):
+        should_consuming = self._should_consuming(
+            wall, snapshot.ts, executed_at_wall, cancel_share
+        )
+        if should_consuming:
+            if wall.consuming_ts is None:
+                events.append(
+                    self._build_wall_event(
+                        state=state,
+                        wall=wall,
+                        qty=candidate.size,
+                        dwell_seconds=dwell_seconds,
+                        event="wall_consuming",
+                    )
+                )
+                wall.consuming_ts = snapshot.ts
             reasons = [
                 f"drop>={self._config.consuming_drop_pct:.2f}",
                 f"exec>={self._config.min_exec_confirm}",
@@ -168,7 +240,7 @@ class WallDetector:
             dwell_seconds=dwell_seconds,
             debug_interval=debug_interval,
         )
-        return alerts, debug_payload
+        return alerts, debug_payload, events
 
     def _find_candidate(
         self, snapshot: OrderBookSnapshot, tick_size: float
@@ -247,10 +319,51 @@ class WallDetector:
             first_seen=ts,
             last_seen=ts,
             last_size=candidate.size,
+            distance_ticks=candidate.distance_ticks,
+            ratio_to_median=candidate.ratio,
             reposition_count=reposition_count,
         )
         state.active_wall = new_wall
         return new_wall, teleport_detected
+
+    def _resolve_lost_reason(
+        self, snapshot: OrderBookSnapshot, wall: ActiveWall, teleport_detected: bool
+    ) -> str:
+        if teleport_detected:
+            return "teleport"
+        level_qty = self._find_level_quantity(snapshot, wall.side, wall.price)
+        return "disappear" if level_qty is None else "cancel"
+
+    def _find_level_quantity(
+        self, snapshot: OrderBookSnapshot, side: Side, price: float
+    ) -> float | None:
+        levels = snapshot.bids if side == Side.BUY else snapshot.asks
+        for level in levels:
+            if level.price == price:
+                return level.quantity
+        return None
+
+    def _build_wall_event(
+        self,
+        *,
+        state: InstrumentState,
+        wall: ActiveWall,
+        qty: float,
+        dwell_seconds: float,
+        event: str,
+        reason: str | None = None,
+    ) -> WallEvent:
+        return WallEvent(
+            event=event,
+            symbol=state.symbol,
+            side=wall.side,
+            price=wall.price,
+            qty=qty,
+            distance_ticks=wall.distance_ticks,
+            ratio_to_median=wall.ratio_to_median,
+            dwell_seconds=dwell_seconds,
+            reason=reason,
+        )
 
     def _build_debug_payload(
         self,

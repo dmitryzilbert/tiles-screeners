@@ -213,10 +213,16 @@ class TelegramMonitor:
             watcher = asyncio.create_task(_watch_stop())
             self._stream_status = "running"
             try:
+                def _on_order_book(snapshot: Any) -> list[Any]:
+                    alerts, events = self._detector.on_order_book_with_events(snapshot)
+                    for event in events:
+                        self._logger.info(event.event, extra=event.to_log_extra())
+                    return alerts
+
                 await self._client.stream_market_data(
                     instruments=resolved,
                     depth=self._config.depth,
-                    on_order_book=self._detector.on_order_book,
+                    on_order_book=_on_order_book,
                     on_trade=self._detector.on_trade,
                     on_alerts=self._on_alerts,
                     stop_event=stream_stop,
