@@ -29,12 +29,9 @@ from wallwatch.app.config import (
 from wallwatch.detector.wall_detector import DetectorConfig
 from wallwatch.app.market_data_manager import MarketDataManager
 from wallwatch.app.runtime_state import RuntimeState
-from wallwatch.app.telegram_bot import (
-    TelegramApiClient,
-    TelegramCommandHandler,
-    TelegramPolling,
-    UrllibTelegramHttpClient,
-)
+from wallwatch.app.commands import TelegramCommandHandler
+from wallwatch.app.telegram_client import TelegramApiClient, UrllibTelegramHttpClient
+from wallwatch.app.telegram_polling import TelegramPolling
 from wallwatch.notify.notifier import ConsoleNotifier
 from wallwatch.notify.telegram_notifier import TelegramNotifier
 
@@ -403,8 +400,8 @@ async def run_monitor_async(argv: list[str]) -> None:
     if config.telegram.enabled and config.telegram.startup_message and telegram_api is not None:
         recipients = list(settings.tg_chat_ids)
         if not recipients and telegram_polling is not None:
-            if telegram_polling.last_command_chat_id is not None:
-                recipients = [telegram_polling.last_command_chat_id]
+            if telegram_polling.last_chat_id is not None:
+                recipients = [telegram_polling.last_chat_id]
         if recipients:
             startup_text = (
                 f"✅ wallwatch started (pid={runtime_state.pid}, "
