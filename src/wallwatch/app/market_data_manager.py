@@ -93,7 +93,7 @@ class MarketDataManager:
         while not self._stop_event.is_set():
             symbols = await self.get_symbols()
             if not symbols:
-                self._runtime_state.update_sync(stream_state="connecting", last_error="no symbols")
+                self._runtime_state.update_sync(stream_state="idle", last_error=None)
                 await asyncio.sleep(1.0)
                 continue
 

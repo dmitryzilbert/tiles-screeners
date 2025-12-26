@@ -94,7 +94,7 @@ def _parse_symbols(raw: str) -> list[str]:
 
 def _build_run_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Order book wall monitor")
-    parser.add_argument("--symbols", required=True, help="Comma separated symbols/ISINs")
+    parser.add_argument("--symbols", required=False, help="Comma separated symbols/ISINs")
     parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument(
@@ -209,7 +209,7 @@ async def run_monitor_async(argv: list[str]) -> None:
     depth = resolve_depth(args.depth, detector_config.depth)
     detector_config = DetectorConfig(**{**asdict(detector_config), "depth": depth})
 
-    symbols = _parse_symbols(args.symbols)
+    symbols = _parse_symbols(args.symbols) if args.symbols else []
     if len(symbols) > detector_config.max_symbols:
         symbols = symbols[: detector_config.max_symbols]
 
@@ -285,7 +285,7 @@ async def run_monitor_async(argv: list[str]) -> None:
         current_symbols=list(symbols),
         depth=detector_config.depth,
     )
-    runtime_state.update_sync(stream_state="connecting")
+    runtime_state.update_sync(stream_state="connecting" if symbols else "idle")
     manager = MarketDataManager(
         detector_config=detector_config,
         client=client,
