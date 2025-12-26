@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import html
 import logging
 from typing import Callable, Iterable
 
@@ -54,13 +55,13 @@ def _format_since_last(snapshot: RuntimeStateSnapshot) -> str:
 
 
 def format_ping_response(snapshot: RuntimeStateSnapshot, now: datetime) -> str:
-    timestamp = now.isoformat(timespec="seconds")
-    uptime = format_uptime(snapshot.started_at, now)
-    since_last = _format_since_last(snapshot)
+    timestamp = html.escape(now.isoformat(timespec="seconds"))
+    uptime = html.escape(format_uptime(snapshot.started_at, now))
+    since_last = html.escape(_format_since_last(snapshot))
     return (
-        f"pong {timestamp} uptime={uptime} stream_state={snapshot.stream_state} "
-        f"rx_total_orderbooks={snapshot.rx_total_orderbooks} "
-        f"rx_total_trades={snapshot.rx_total_trades} "
+        f"pong {timestamp} uptime={uptime} stream_state={html.escape(str(snapshot.stream_state))} "
+        f"rx_total_orderbooks={html.escape(str(snapshot.rx_total_orderbooks))} "
+        f"rx_total_trades={html.escape(str(snapshot.rx_total_trades))} "
         f"since_last_message_seconds={since_last}"
     )
 
@@ -68,20 +69,25 @@ def format_ping_response(snapshot: RuntimeStateSnapshot, now: datetime) -> str:
 def _format_last_wall_event(event: WallEventState | None) -> str:
     if event is None:
         return "none"
-    ts = event.ts.isoformat(timespec="seconds")
-    return f"{event.event_type} {event.symbol} {event.side} {event.price} {event.qty} @ {ts}"
+    ts = html.escape(event.ts.isoformat(timespec="seconds"))
+    return (
+        f"{html.escape(str(event.event_type))} {html.escape(str(event.symbol))} "
+        f"{html.escape(str(event.side))} {html.escape(str(event.price))} "
+        f"{html.escape(str(event.qty))} @ {ts}"
+    )
 
 
 def format_status_response(snapshot: RuntimeStateSnapshot) -> str:
     symbols_text = ", ".join(snapshot.current_symbols) if snapshot.current_symbols else "none"
-    since_last = _format_since_last(snapshot)
+    symbols_text = html.escape(symbols_text)
+    since_last = html.escape(_format_since_last(snapshot))
     lines = [
-        f"state={snapshot.stream_state}",
+        f"state={html.escape(str(snapshot.stream_state))}",
         f"since_last_message={since_last}",
-        f"rx_total_orderbooks={snapshot.rx_total_orderbooks}",
-        f"rx_total_trades={snapshot.rx_total_trades}",
+        f"rx_total_orderbooks={html.escape(str(snapshot.rx_total_orderbooks))}",
+        f"rx_total_trades={html.escape(str(snapshot.rx_total_trades))}",
         f"symbols={symbols_text}",
-        f"depth={snapshot.depth}",
+        f"depth={html.escape(str(snapshot.depth))}",
         f"last_wall_event={_format_last_wall_event(snapshot.last_wall_event)}",
     ]
     return "\n".join(lines)
@@ -137,7 +143,7 @@ class TelegramCommandHandler:
         if parsed.name == "list":
             symbols = await self._manager.get_symbols()
             symbols_text = ", ".join(symbols) if symbols else "none"
-            return f"symbols={symbols_text}"
+            return f"symbols={html.escape(symbols_text)}"
         if parsed.name == "watch":
             if not parsed.args:
                 return "Usage: /watch <symbols>"
@@ -145,9 +151,9 @@ class TelegramCommandHandler:
             if not symbols:
                 return "Usage: /watch <symbols>"
             if len(symbols) > self._max_symbols:
-                return f"Too many symbols (max {self._max_symbols})."
+                return f"Too many symbols (max {html.escape(str(self._max_symbols))})."
             await self._manager.update_symbols(symbols)
-            return f"watching: {', '.join(symbols)}"
+            return f"watching: {html.escape(', '.join(symbols))}"
         if parsed.name == "unwatch":
             if not parsed.args:
                 return "Usage: /unwatch <symbols>"
@@ -161,8 +167,8 @@ class TelegramCommandHandler:
             if not removed:
                 return "no matching symbols to remove"
             if not remaining:
-                return f"removed: {', '.join(removed)} (idle)"
-            return f"removed: {', '.join(removed)}"
+                return f"removed: {html.escape(', '.join(removed))} (idle)"
+            return f"removed: {html.escape(', '.join(removed))}"
         return "Unknown command. Use /help."
 
     def _start_text(self) -> str:

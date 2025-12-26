@@ -7,12 +7,14 @@ import html
 import logging
 import time
 from typing import Any, Awaitable, Callable, Iterable
+from urllib import error as urllib_error
 from urllib.parse import quote
 
 from t_tech.invest import schemas
 from urllib import request as urllib_request
 
 from wallwatch.api.client import InstrumentInfo
+from wallwatch.app.telegram_client import TelegramApiError, _extract_description
 from wallwatch.state.models import Side, WallEvent
 
 _EVENT_TITLES = {
@@ -73,7 +75,7 @@ def format_event_message(event: WallEvent, instrument_url: str | None) -> str:
         f"<b>Price:</b> {_format_decimal(event.price)}",
         f"<b>Qty:</b> {_format_decimal(event.qty)}",
         f"<b>Ratio to median:</b> {_format_decimal(event.ratio_to_median, digits=2)}",
-        f"<b>Distance to spread:</b> {distance_ticks}",
+        f"<b>Distance to spread:</b> {html.escape(distance_ticks)}",
         f"<b>Dwell:</b> {_format_decimal(event.dwell_seconds, digits=1)}s",
         f"<b>Qty change:</b> {_format_signed(event.qty_change_last_interval)}",
     ]
@@ -185,9 +187,13 @@ class TelegramNotifier:
                     f"https://api.telegram.org/bot{self._token}/sendMessage", data
                 )
             except Exception as exc:  # noqa: BLE001
+                description = exc.description if isinstance(exc, TelegramApiError) else None
+                extra = {"error": self._redact_token(str(exc))}
+                if description:
+                    extra["telegram_description"] = description
                 self._logger.warning(
                     "telegram_send_failed",
-                    extra={"error": self._redact_token(str(exc))},
+                    extra=extra,
                 )
 
     def _cooldown_allows(self, event: WallEvent) -> bool:
@@ -207,13 +213,15 @@ class TelegramNotifier:
 
     async def _send_via_http(self, url: str, payload: dict[str, Any]) -> None:
         data = json.dumps(payload).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json; charset=utf-8"}
         req = urllib_request.Request(url, data=data, headers=headers)
 
         def _do_request() -> None:
-            with urllib_request.urlopen(req, timeout=10) as response:
-                if response.status >= 400:
-                    raise RuntimeError(f"HTTP {response.status}")
-                response.read()
+            try:
+                with urllib_request.urlopen(req, timeout=10) as response:
+                    response.read()
+            except urllib_error.HTTPError as exc:
+                description = _extract_description(exc)
+                raise TelegramApiError(f"HTTP {exc.code}", description=description) from exc
 
         await asyncio.to_thread(_do_request)
