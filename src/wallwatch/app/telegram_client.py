@@ -5,6 +5,13 @@ import json
 import logging
 from typing import Any, Protocol
 from urllib import request as urllib_request
+from urllib import error as urllib_error
+
+
+class TelegramApiError(RuntimeError):
+    def __init__(self, message: str, *, description: str | None = None) -> None:
+        super().__init__(message)
+        self.description = description
 
 
 class TelegramHttpClient(Protocol):
@@ -15,15 +22,17 @@ class TelegramHttpClient(Protocol):
 class UrllibTelegramHttpClient:
     async def post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         data = json.dumps(payload).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json; charset=utf-8"}
         req = urllib_request.Request(url, data=data, headers=headers)
 
         def _do_request() -> dict[str, Any]:
-            with urllib_request.urlopen(req, timeout=30) as response:
-                if response.status >= 400:
-                    raise RuntimeError(f"HTTP {response.status}")
-                payload_data = response.read()
-                return json.loads(payload_data.decode("utf-8"))
+            try:
+                with urllib_request.urlopen(req, timeout=30) as response:
+                    payload_data = response.read()
+                    return json.loads(payload_data.decode("utf-8"))
+            except urllib_error.HTTPError as exc:
+                description = _extract_description(exc)
+                raise TelegramApiError(f"HTTP {exc.code}", description=description) from exc
 
         return await asyncio.to_thread(_do_request)
 
@@ -62,3 +71,20 @@ class TelegramApiClient:
 
     def _url(self, path: str) -> str:
         return f"https://api.telegram.org/bot{self._token}{path}"
+
+
+def _extract_description(exc: urllib_error.HTTPError) -> str | None:
+    try:
+        body = exc.read()
+    except Exception:  # noqa: BLE001
+        return None
+    if not body:
+        return None
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return body.decode("utf-8", errors="replace")
+    if isinstance(payload, dict):
+        description = payload.get("description")
+        return str(description) if description else None
+    return None

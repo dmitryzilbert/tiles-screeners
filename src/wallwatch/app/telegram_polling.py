@@ -5,7 +5,7 @@ import logging
 from typing import Iterable
 
 from wallwatch.app.commands import TelegramCommandHandler
-from wallwatch.app.telegram_client import TelegramApiClient
+from wallwatch.app.telegram_client import TelegramApiClient, TelegramApiError
 
 
 class TelegramPolling:
@@ -88,4 +88,8 @@ class TelegramPolling:
                 disable_web_preview=self._disable_web_preview,
             )
         except Exception as exc:  # noqa: BLE001
-            self._logger.warning("telegram_send_failed", extra={"error": str(exc)})
+            description = exc.description if isinstance(exc, TelegramApiError) else None
+            extra = {"error": str(exc)}
+            if description:
+                extra["telegram_description"] = description
+            self._logger.warning("telegram_send_failed", extra=extra)

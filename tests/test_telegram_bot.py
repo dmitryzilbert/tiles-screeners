@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
+from urllib import request as urllib_request
 
 from wallwatch.app.commands import (
     TelegramCommandHandler,
@@ -10,7 +12,7 @@ from wallwatch.app.commands import (
     format_status_response,
 )
 from wallwatch.app.runtime_state import RuntimeState, RuntimeStateSnapshot, WallEventState
-from wallwatch.app.telegram_client import TelegramApiClient
+from wallwatch.app.telegram_client import TelegramApiClient, UrllibTelegramHttpClient
 
 
 class FakeManager:
@@ -148,3 +150,42 @@ def test_start_and_help_responses() -> None:
     assert "/help" in start_response
     assert help_response is not None
     assert "Привет" not in help_response
+
+
+def test_telegram_http_client_sends_json(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+    payload = {
+        "chat_id": 1,
+        "text": "hello",
+        "reply_markup": {"inline_keyboard": [[{"text": "Open", "url": "https://x"}]]},
+    }
+
+    def fake_urlopen(req: urllib_request.Request, timeout: int = 0):
+        seen["data"] = req.data
+        seen["headers"] = {key.lower(): value for key, value in req.headers.items()}
+
+        class Response:
+            status = 200
+
+            def read(self) -> bytes:
+                return b'{"ok": true, "result": {"message_id": 1}}'
+
+            def __enter__(self) -> Response:
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+        return Response()
+
+    monkeypatch.setattr(urllib_request, "urlopen", fake_urlopen)
+
+    async def _run() -> None:
+        client = UrllibTelegramHttpClient()
+        await client.post_json("https://api.telegram.org/bot123/sendMessage", payload)
+
+    asyncio.run(_run())
+
+    assert seen["headers"]["content-type"] == "application/json; charset=utf-8"
+    assert isinstance(seen["data"], bytes)
+    assert json.loads(seen["data"].decode("utf-8")) == payload
