@@ -54,14 +54,22 @@ def _format_since_last(snapshot: RuntimeStateSnapshot) -> str:
     return f"{snapshot.since_last_message_seconds:.3f}s"
 
 
+def html_escape(value: object) -> str:
+    return html.escape(str(value))
+
+
+def format_code(text: str) -> str:
+    return f"<code>{html_escape(text)}</code>"
+
+
 def format_ping_response(snapshot: RuntimeStateSnapshot, now: datetime) -> str:
-    timestamp = html.escape(now.isoformat(timespec="seconds"))
-    uptime = html.escape(format_uptime(snapshot.started_at, now))
-    since_last = html.escape(_format_since_last(snapshot))
+    timestamp = html_escape(now.isoformat(timespec="seconds"))
+    uptime = html_escape(format_uptime(snapshot.started_at, now))
+    since_last = html_escape(_format_since_last(snapshot))
     return (
-        f"pong {timestamp} uptime={uptime} stream_state={html.escape(str(snapshot.stream_state))} "
-        f"rx_total_orderbooks={html.escape(str(snapshot.rx_total_orderbooks))} "
-        f"rx_total_trades={html.escape(str(snapshot.rx_total_trades))} "
+        f"pong {timestamp} uptime={uptime} stream_state={html_escape(snapshot.stream_state)} "
+        f"rx_total_orderbooks={html_escape(snapshot.rx_total_orderbooks)} "
+        f"rx_total_trades={html_escape(snapshot.rx_total_trades)} "
         f"since_last_message_seconds={since_last}"
     )
 
@@ -69,25 +77,25 @@ def format_ping_response(snapshot: RuntimeStateSnapshot, now: datetime) -> str:
 def _format_last_wall_event(event: WallEventState | None) -> str:
     if event is None:
         return "none"
-    ts = html.escape(event.ts.isoformat(timespec="seconds"))
+    ts = html_escape(event.ts.isoformat(timespec="seconds"))
     return (
-        f"{html.escape(str(event.event_type))} {html.escape(str(event.symbol))} "
-        f"{html.escape(str(event.side))} {html.escape(str(event.price))} "
-        f"{html.escape(str(event.qty))} @ {ts}"
+        f"{html_escape(event.event_type)} {html_escape(event.symbol)} "
+        f"{html_escape(event.side)} {html_escape(event.price)} "
+        f"{html_escape(event.qty)} @ {ts}"
     )
 
 
 def format_status_response(snapshot: RuntimeStateSnapshot) -> str:
     symbols_text = ", ".join(snapshot.current_symbols) if snapshot.current_symbols else "none"
-    symbols_text = html.escape(symbols_text)
-    since_last = html.escape(_format_since_last(snapshot))
+    symbols_text = html_escape(symbols_text)
+    since_last = html_escape(_format_since_last(snapshot))
     lines = [
-        f"state={html.escape(str(snapshot.stream_state))}",
+        f"state={html_escape(snapshot.stream_state)}",
         f"since_last_message={since_last}",
-        f"rx_total_orderbooks={html.escape(str(snapshot.rx_total_orderbooks))}",
-        f"rx_total_trades={html.escape(str(snapshot.rx_total_trades))}",
+        f"rx_total_orderbooks={html_escape(snapshot.rx_total_orderbooks)}",
+        f"rx_total_trades={html_escape(snapshot.rx_total_trades)}",
         f"symbols={symbols_text}",
-        f"depth={html.escape(str(snapshot.depth))}",
+        f"depth={html_escape(snapshot.depth)}",
         f"last_wall_event={_format_last_wall_event(snapshot.last_wall_event)}",
     ]
     return "\n".join(lines)
@@ -143,23 +151,23 @@ class TelegramCommandHandler:
         if parsed.name == "list":
             symbols = await self._manager.get_symbols()
             symbols_text = ", ".join(symbols) if symbols else "none"
-            return f"symbols={html.escape(symbols_text)}"
+            return f"symbols={html_escape(symbols_text)}"
         if parsed.name == "watch":
             if not parsed.args:
-                return "Usage: /watch <symbols>"
+                return f"Usage: {format_code('/watch <symbols>')}"
             symbols = parse_symbols(parsed.args)
             if not symbols:
-                return "Usage: /watch <symbols>"
+                return f"Usage: {format_code('/watch <symbols>')}"
             if len(symbols) > self._max_symbols:
-                return f"Too many symbols (max {html.escape(str(self._max_symbols))})."
+                return f"Too many symbols (max {html_escape(self._max_symbols)})."
             await self._manager.update_symbols(symbols)
-            return f"watching: {html.escape(', '.join(symbols))}"
+            return f"watching: {html_escape(', '.join(symbols))}"
         if parsed.name == "unwatch":
             if not parsed.args:
-                return "Usage: /unwatch <symbols>"
+                return f"Usage: {format_code('/unwatch <symbols>')}"
             symbols = parse_symbols(parsed.args)
             if not symbols:
-                return "Usage: /unwatch <symbols>"
+                return f"Usage: {format_code('/unwatch <symbols>')}"
             current = await self._manager.get_symbols()
             remaining = [symbol for symbol in current if symbol not in symbols]
             await self._manager.update_symbols(remaining)
@@ -167,8 +175,8 @@ class TelegramCommandHandler:
             if not removed:
                 return "no matching symbols to remove"
             if not remaining:
-                return f"removed: {html.escape(', '.join(removed))} (idle)"
-            return f"removed: {html.escape(', '.join(removed))}"
+                return f"removed: {html_escape(', '.join(removed))} (idle)"
+            return f"removed: {html_escape(', '.join(removed))}"
         return "Unknown command. Use /help."
 
     def _start_text(self) -> str:
@@ -185,7 +193,7 @@ class TelegramCommandHandler:
             "/help - список команд\n"
             "/ping - health check\n"
             "/status - текущий статус стрима\n"
-            "/watch <symbols> - установить список (до 10)\n"
-            "/unwatch <symbols> - убрать символы\n"
+            f"/watch - установить список (до 10), например {format_code('/watch SBER GAZP')}\n"
+            f"/unwatch - убрать символы, например {format_code('/unwatch SBER GAZP')}\n"
             "/list - показать текущие symbols"
         )

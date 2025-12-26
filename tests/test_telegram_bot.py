@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from urllib import request as urllib_request
 
@@ -150,6 +151,11 @@ def test_start_and_help_responses() -> None:
     assert "/help" in start_response
     assert help_response is not None
     assert "Привет" not in help_response
+    for text in (start_response, help_response):
+        assert "<symbols>" not in text
+        assert "</symbols>" not in text
+        tags = re.findall(r"</?([a-zA-Z0-9]+)>", text)
+        assert all(tag == "code" for tag in tags)
 
 
 def test_telegram_http_client_sends_json(monkeypatch) -> None:
