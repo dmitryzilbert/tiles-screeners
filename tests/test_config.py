@@ -137,19 +137,27 @@ def test_telegram_config_from_yaml(tmp_path: Path) -> None:
         """
 telegram:
   enabled: true
+  polling: false
+  poll_interval_seconds: 2.0
+  startup_message: true
   send_events: [wall_candidate]
   cooldown_seconds:
     wall_candidate: 10
   disable_web_preview: false
+  commands_enabled: false
 """.lstrip()
     )
 
     config = load_app_config(config_path)
 
     assert config.telegram.enabled is True
+    assert config.telegram.polling is False
+    assert config.telegram.poll_interval_seconds == 2.0
+    assert config.telegram.startup_message is True
     assert config.telegram.send_events == ("wall_candidate",)
     assert config.telegram.cooldown_seconds["wall_candidate"] == 10.0
     assert config.telegram.disable_web_preview is False
+    assert config.telegram.commands_enabled is False
 
 
 def test_unknown_config_keys_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

@@ -72,7 +72,14 @@ class DebugConfig:
 @dataclass(frozen=True)
 class TelegramConfig:
     enabled: bool = False
-    send_events: tuple[str, ...] = ("wall_confirmed", "wall_consuming")
+    polling: bool = True
+    poll_interval_seconds: float = 1.0
+    startup_message: bool = False
+    send_events: tuple[str, ...] = (
+        "wall_confirmed",
+        "wall_consuming",
+        "wall_lost",
+    )
     cooldown_seconds: dict[str, float] = field(
         default_factory=lambda: {
             "wall_candidate": 60.0,
@@ -82,6 +89,7 @@ class TelegramConfig:
         }
     )
     disable_web_preview: bool = True
+    commands_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -163,7 +171,11 @@ def load_env_settings(warn_deprecated_env: bool | None = None) -> EnvSettings:
         warn_deprecated_env=warn_deprecated_env,
     )
     tg_bot_token = _get_env_value("tg_bot_token", warn_deprecated_env=warn_deprecated_env)
-    tg_chat_ids = _parse_int_list_env("tg_chat_id", warn_deprecated_env=warn_deprecated_env)
+    tg_chat_ids = _parse_int_list_env(
+        "tg_chat_ids",
+        legacy_names=["tg_chat_id"],
+        warn_deprecated_env=warn_deprecated_env,
+    )
     tg_allowed_user_ids = _parse_int_list_env(
         "tg_allowed_user_ids",
         warn_deprecated_env=warn_deprecated_env,
@@ -382,8 +394,17 @@ def _parse_bool_env(name: str, default: bool, warn_deprecated_env: bool = False)
     return _parse_bool_value(name, raw)
 
 
-def _parse_int_list_env(name: str, warn_deprecated_env: bool = False) -> list[int]:
-    raw = _get_env_value(name, warn_deprecated_env=warn_deprecated_env)
+def _parse_int_list_env(
+    name: str,
+    *,
+    legacy_names: list[str] | None = None,
+    warn_deprecated_env: bool = False,
+) -> list[int]:
+    raw = _get_env_value(
+        name,
+        legacy_names=legacy_names,
+        warn_deprecated_env=warn_deprecated_env,
+    )
     if raw is None:
         return []
     values: list[int] = []
@@ -642,6 +663,18 @@ def _parse_telegram_config(raw: dict[str, Any]) -> TelegramConfig:
         _value_or_default(raw, "enabled", base.enabled),
         "telegram.enabled",
     )
+    polling = _parse_bool_value_yaml(
+        _value_or_default(raw, "polling", base.polling),
+        "telegram.polling",
+    )
+    poll_interval_seconds = _parse_float_value(
+        _value_or_default(raw, "poll_interval_seconds", base.poll_interval_seconds),
+        "telegram.poll_interval_seconds",
+    )
+    startup_message = _parse_bool_value_yaml(
+        _value_or_default(raw, "startup_message", base.startup_message),
+        "telegram.startup_message",
+    )
     send_events_value = _value_or_default(raw, "send_events", base.send_events)
     send_events = _parse_telegram_send_events(send_events_value)
     cooldown_raw = _value_or_default(raw, "cooldown_seconds", base.cooldown_seconds)
@@ -650,11 +683,19 @@ def _parse_telegram_config(raw: dict[str, Any]) -> TelegramConfig:
         _value_or_default(raw, "disable_web_preview", base.disable_web_preview),
         "telegram.disable_web_preview",
     )
+    commands_enabled = _parse_bool_value_yaml(
+        _value_or_default(raw, "commands_enabled", base.commands_enabled),
+        "telegram.commands_enabled",
+    )
     return TelegramConfig(
         enabled=enabled,
+        polling=polling,
+        poll_interval_seconds=poll_interval_seconds,
+        startup_message=startup_message,
         send_events=send_events,
         cooldown_seconds=cooldown_seconds,
         disable_web_preview=disable_web_preview,
+        commands_enabled=commands_enabled,
     )
 
 
@@ -748,7 +789,16 @@ def _collect_unknown_keys(raw: dict[str, Any]) -> list[str]:
             "teleport_reset",
         },
         "debug": {"walls_enabled", "walls_interval_seconds"},
-        "telegram": {"enabled", "send_events", "cooldown_seconds", "disable_web_preview"},
+        "telegram": {
+            "enabled",
+            "polling",
+            "poll_interval_seconds",
+            "startup_message",
+            "send_events",
+            "cooldown_seconds",
+            "disable_web_preview",
+            "commands_enabled",
+        },
     }
     for section, allowed_keys in section_allowed.items():
         raw_section = raw.get(section)

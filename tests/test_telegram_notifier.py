@@ -7,6 +7,7 @@ from t_tech.invest import schemas
 
 from wallwatch.api.client import InstrumentInfo
 from wallwatch.notify.telegram_notifier import (
+    build_inline_keyboard,
     build_instrument_url_parts,
     format_event_message,
     TelegramNotifier,
@@ -88,6 +89,12 @@ def test_format_event_message_contains_fields_and_link() -> None:
     assert "Dwell" in message
     assert "Qty change" in message
     assert url in message
+
+
+def test_build_inline_keyboard() -> None:
+    url = "https://www.tbank.ru/invest/stocks/SBER/"
+    keyboard = build_inline_keyboard(url)
+    assert keyboard["inline_keyboard"] == [[{"text": "Открыть в Т-Инвестициях", "url": url}]]
 
 
 def test_cooldown_prevents_duplicate_events() -> None:
