@@ -13,10 +13,10 @@ from wallwatch.app.config import AppConfig
 from wallwatch.api.client import InstrumentInfo
 
 
-def test_run_parser_requires_symbols() -> None:
+def test_cli_symbols_optional() -> None:
     parser = app_main._build_run_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args([])
+    args = parser.parse_args([])
+    assert args.symbols is None
 
 
 def test_doctor_parser_symbols_optional() -> None:
