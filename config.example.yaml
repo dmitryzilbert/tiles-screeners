@@ -20,12 +20,17 @@ debug:
 
 telegram:
   enabled: false
+  polling: true
+  poll_interval_seconds: 1.0
+  startup_message: false
   send_events:
     - wall_confirmed
     - wall_consuming
+    - wall_lost
   cooldown_seconds:
     wall_candidate: 60
     wall_confirmed: 0
     wall_consuming: 0
     wall_lost: 0
   disable_web_preview: true
+  commands_enabled: true

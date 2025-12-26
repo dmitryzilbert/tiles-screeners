@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from wallwatch.app.telegram import ParsedCommand, parse_command
+from wallwatch.app.telegram_bot import ParsedCommand, parse_command
 
 
 def test_parse_command_simple() -> None:

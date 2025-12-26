@@ -23,6 +23,10 @@ _EVENT_TITLES = {
 }
 
 
+def build_inline_keyboard(url: str) -> dict[str, Any]:
+    return {"inline_keyboard": [[{"text": "Открыть в Т-Инвестициях", "url": url}]]}
+
+
 def build_instrument_url(instrument: InstrumentInfo | None) -> str | None:
     if instrument is None:
         return None
@@ -125,6 +129,9 @@ class TelegramNotifier:
         self._task = asyncio.create_task(self._worker()) if start_worker else None
         self._last_sent: dict[tuple[str, str], float] = {}
 
+    def update_instruments(self, instrument_by_symbol: dict[str, InstrumentInfo]) -> None:
+        self._instrument_by_symbol = instrument_by_symbol
+
     def notify(self, event: WallEvent) -> None:
         if event.event not in self._send_events:
             return
@@ -139,11 +146,7 @@ class TelegramNotifier:
             "disable_web_page_preview": self._disable_web_preview,
         }
         if instrument_url:
-            payload["reply_markup"] = {
-                "inline_keyboard": [
-                    [{"text": "Открыть в Т-Инвестициях", "url": instrument_url}]
-                ]
-            }
+            payload["reply_markup"] = build_inline_keyboard(instrument_url)
         self._enqueue(payload)
 
     def close(self) -> None:
