@@ -4,13 +4,13 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from wallwatch.app.runtime_state import RuntimeState, RuntimeStateSnapshot, WallEventState
-from wallwatch.app.telegram_bot import (
-    TelegramApiClient,
+from wallwatch.app.commands import (
     TelegramCommandHandler,
     format_ping_response,
     format_status_response,
 )
+from wallwatch.app.runtime_state import RuntimeState, RuntimeStateSnapshot, WallEventState
+from wallwatch.app.telegram_client import TelegramApiClient
 
 
 class FakeManager:
@@ -77,7 +77,11 @@ def test_ping_and_status_responses() -> None:
     now = datetime(2024, 1, 1, 0, 0, 10, tzinfo=timezone.utc)
     ping = format_ping_response(snapshot, now)
     status = format_status_response(snapshot)
-    assert ping == "pong 2024-01-01T00:00:10+00:00 uptime=0h0m state=connected"
+    assert (
+        ping
+        == "pong 2024-01-01T00:00:10+00:00 uptime=0h0m stream_state=connected "
+        "rx_total_orderbooks=10 rx_total_trades=5 since_last_message_seconds=0.500s"
+    )
     assert "state=connected" in status
     assert "symbols=SBER" in status
 
@@ -110,3 +114,37 @@ def test_watch_updates_symbols() -> None:
 
     assert response == "watching: SBER, GAZP"
     assert manager.updated == ["SBER", "GAZP"]
+
+
+def test_start_and_help_responses() -> None:
+    runtime_state = RuntimeState(
+        started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        pid=1,
+        current_symbols=["SBER"],
+        depth=20,
+    )
+    manager = FakeManager(symbols=["SBER"])
+
+    handler = TelegramCommandHandler(
+        runtime_state=runtime_state,
+        manager=manager,
+        max_symbols=10,
+        allowed_user_ids=set(),
+        logger=logging.getLogger("test"),
+        time_provider=datetime.now,
+    )
+
+    async def _run_start() -> str | None:
+        return await handler.handle_command("/start", chat_id=1, user_id=2)
+
+    async def _run_help() -> str | None:
+        return await handler.handle_command("/help", chat_id=1, user_id=2)
+
+    start_response = asyncio.run(_run_start())
+    help_response = asyncio.run(_run_help())
+
+    assert start_response is not None
+    assert "Привет" in start_response
+    assert "/help" in start_response
+    assert help_response is not None
+    assert "Привет" not in help_response
