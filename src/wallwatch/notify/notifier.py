@@ -37,7 +37,7 @@ class ConsoleNotifier(Notifier):
         )
 
 
-class TelegramNotifier(Notifier):
+class TelegramBotNotifier(Notifier):
     def __init__(
         self,
         bot: Any,
