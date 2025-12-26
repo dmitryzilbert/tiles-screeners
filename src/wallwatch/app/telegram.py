@@ -26,7 +26,7 @@ from wallwatch.app.config import (
 )
 from wallwatch.app.main import _configure_logger, build_doctor_report
 from wallwatch.detector.wall_detector import DetectorConfig, WallDetector
-from wallwatch.notify.notifier import TelegramNotifier
+from wallwatch.notify.notifier import TelegramBotNotifier
 
 
 @dataclass(frozen=True)
@@ -95,7 +95,7 @@ class TelegramMonitor:
         *,
         config: DetectorConfig,
         client: MarketDataClient,
-        notifier: TelegramNotifier,
+        notifier: TelegramBotNotifier,
         logger: logging.Logger,
         max_symbols: int,
         initial_symbols: list[str],
@@ -328,7 +328,7 @@ async def run_telegram_async(argv: list[str]) -> None:
         sys.exit(1)
 
     bot = ApplicationBuilder().token(settings.tg_bot_token or "").build()
-    notifier = TelegramNotifier(
+    notifier = TelegramBotNotifier(
         bot.bot,
         settings.tg_chat_ids,
         settings.tg_parse_mode,

@@ -17,3 +17,15 @@ walls:
 debug:
   walls_enabled: false
   walls_interval_seconds: 1.0
+
+telegram:
+  enabled: false
+  send_events:
+    - wall_confirmed
+    - wall_consuming
+  cooldown_seconds:
+    wall_candidate: 60
+    wall_confirmed: 0
+    wall_consuming: 0
+    wall_lost: 0
+  disable_web_preview: true

@@ -6,7 +6,7 @@ import importlib.util
 import logging
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -70,11 +70,27 @@ class DebugConfig:
 
 
 @dataclass(frozen=True)
+class TelegramConfig:
+    enabled: bool = False
+    send_events: tuple[str, ...] = ("wall_confirmed", "wall_consuming")
+    cooldown_seconds: dict[str, float] = field(
+        default_factory=lambda: {
+            "wall_candidate": 60.0,
+            "wall_confirmed": 0.0,
+            "wall_consuming": 0.0,
+            "wall_lost": 0.0,
+        }
+    )
+    disable_web_preview: bool = True
+
+
+@dataclass(frozen=True)
 class AppConfig:
     logging: LoggingConfig = LoggingConfig()
     marketdata: MarketDataConfig = MarketDataConfig()
     walls: WallsConfig = WallsConfig()
     debug: DebugConfig = DebugConfig()
+    telegram: TelegramConfig = TelegramConfig()
     detector_defaults: DetectorConfig = DetectorConfig()
 
     def detector_config(self) -> DetectorConfig:
@@ -98,6 +114,12 @@ class AppConfig:
 
 GRPC_ROOTS_ENV_VAR = "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"
 _DEPRECATED_UPPERCASE_WARNED = False
+_TELEGRAM_EVENTS = {
+    "wall_candidate",
+    "wall_confirmed",
+    "wall_consuming",
+    "wall_lost",
+}
 
 
 def load_env_settings(warn_deprecated_env: bool | None = None) -> EnvSettings:
@@ -473,21 +495,24 @@ def _parse_app_config(raw: dict[str, Any]) -> AppConfig:
     marketdata_section = _get_section(raw, "marketdata")
     walls_section = _get_section(raw, "walls")
     debug_section = _get_section(raw, "debug")
+    telegram_section = _get_section(raw, "telegram")
 
     logging_config = _parse_logging_config(logging_section)
     marketdata_config = _parse_marketdata_config(marketdata_section)
     walls_config = _parse_walls_config(walls_section)
     debug_config = _parse_debug_config(debug_section)
+    telegram_config = _parse_telegram_config(telegram_section)
     return AppConfig(
         logging=logging_config,
         marketdata=marketdata_config,
         walls=walls_config,
         debug=debug_config,
+        telegram=telegram_config,
     )
 
 
 def _has_config_sections(raw: dict[str, Any]) -> bool:
-    return any(key in raw for key in ("logging", "marketdata", "walls", "debug"))
+    return any(key in raw for key in ("logging", "marketdata", "walls", "debug", "telegram"))
 
 
 def _parse_legacy_detector_config(raw: dict[str, Any]) -> AppConfig:
@@ -609,9 +634,81 @@ def _parse_debug_config(raw: dict[str, Any]) -> DebugConfig:
     )
 
 
+def _parse_telegram_config(raw: dict[str, Any]) -> TelegramConfig:
+    base = TelegramConfig()
+    if not raw:
+        return base
+    enabled = _parse_bool_value_yaml(
+        _value_or_default(raw, "enabled", base.enabled),
+        "telegram.enabled",
+    )
+    send_events_value = _value_or_default(raw, "send_events", base.send_events)
+    send_events = _parse_telegram_send_events(send_events_value)
+    cooldown_raw = _value_or_default(raw, "cooldown_seconds", base.cooldown_seconds)
+    cooldown_seconds = _parse_telegram_cooldowns(cooldown_raw, base.cooldown_seconds)
+    disable_web_preview = _parse_bool_value_yaml(
+        _value_or_default(raw, "disable_web_preview", base.disable_web_preview),
+        "telegram.disable_web_preview",
+    )
+    return TelegramConfig(
+        enabled=enabled,
+        send_events=send_events,
+        cooldown_seconds=cooldown_seconds,
+        disable_web_preview=disable_web_preview,
+    )
+
+
 def _value_or_default(raw: dict[str, Any], key: str, default: Any) -> Any:
     value = raw.get(key, default)
     return default if value is None else value
+
+
+def _parse_telegram_send_events(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, (list, tuple)):
+        items = []
+        for item in value:
+            if isinstance(item, str):
+                cleaned = item.strip()
+                if cleaned:
+                    items.append(cleaned)
+            else:
+                raise ConfigError("telegram.send_events must be a list of strings")
+    else:
+        raise ConfigError("telegram.send_events must be a list of strings")
+    if not items:
+        return tuple()
+    unknown = [item for item in items if item not in _TELEGRAM_EVENTS]
+    if unknown:
+        raise ConfigError(
+            "telegram.send_events contains unknown events: " + ", ".join(sorted(unknown))
+        )
+    return tuple(items)
+
+
+def _parse_telegram_cooldowns(
+    value: Any, defaults: dict[str, float]
+) -> dict[str, float]:
+    if value is None:
+        return dict(defaults)
+    if not isinstance(value, dict):
+        raise ConfigError("telegram.cooldown_seconds must be a mapping")
+    cooldowns = dict(defaults)
+    for key, raw_value in value.items():
+        if not isinstance(key, str):
+            raise ConfigError("telegram.cooldown_seconds keys must be strings")
+        if key not in _TELEGRAM_EVENTS:
+            raise ConfigError(
+                "telegram.cooldown_seconds contains unknown events: " + key
+            )
+        cooldown = _parse_float_value(raw_value, f"telegram.cooldown_seconds.{key}")
+        if cooldown < 0:
+            raise ConfigError(
+                f"telegram.cooldown_seconds.{key} must be non-negative"
+            )
+        cooldowns[key] = cooldown
+    return cooldowns
 
 
 def _log_unknown_config_keys(raw: dict[str, Any]) -> None:
@@ -632,7 +729,7 @@ def _collect_unknown_keys(raw: dict[str, Any]) -> list[str]:
         return sorted(set(raw.keys()) - set(DetectorConfig.__dataclass_fields__.keys()))
 
     unknown: list[str] = []
-    top_level_allowed = {"logging", "marketdata", "walls", "debug"}
+    top_level_allowed = {"logging", "marketdata", "walls", "debug", "telegram"}
     for key in raw.keys():
         if key not in top_level_allowed:
             unknown.append(key)
@@ -651,6 +748,7 @@ def _collect_unknown_keys(raw: dict[str, Any]) -> list[str]:
             "teleport_reset",
         },
         "debug": {"walls_enabled", "walls_interval_seconds"},
+        "telegram": {"enabled", "send_events", "cooldown_seconds", "disable_web_preview"},
     }
     for section, allowed_keys in section_allowed.items():
         raw_section = raw.get(section)

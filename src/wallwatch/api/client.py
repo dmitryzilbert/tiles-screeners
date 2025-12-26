@@ -30,6 +30,9 @@ class InstrumentInfo:
     instrument_id: str
     symbol: str
     tick_size: float
+    instrument_type: schemas.InstrumentType | None = None
+    ticker: str | None = None
+    isin: str | None = None
 
 
 class InstrumentResolveError(RuntimeError):
@@ -141,7 +144,17 @@ class MarketDataClient:
         full_instrument = full_response.instrument
         tick_size = self._resolve_tick_size(symbol, full_instrument)
         resolved_id = getattr(full_instrument, "uid", None) or instrument_id
-        return InstrumentInfo(instrument_id=resolved_id, symbol=symbol, tick_size=tick_size)
+        instrument_type = getattr(full_instrument, "instrument_type", None)
+        ticker = getattr(full_instrument, "ticker", None) or getattr(instrument, "ticker", None)
+        isin = getattr(full_instrument, "isin", None) or getattr(instrument, "isin", None)
+        return InstrumentInfo(
+            instrument_id=resolved_id,
+            symbol=symbol,
+            tick_size=tick_size,
+            instrument_type=instrument_type,
+            ticker=ticker,
+            isin=isin,
+        )
 
     async def _find_instrument(
         self, service: InstrumentsService, symbol: str

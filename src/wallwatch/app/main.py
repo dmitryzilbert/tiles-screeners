@@ -27,6 +27,7 @@ from wallwatch.app.config import (
 )
 from wallwatch.detector.wall_detector import DetectorConfig, WallDetector
 from wallwatch.notify.notifier import ConsoleNotifier
+from wallwatch.notify.telegram_notifier import TelegramNotifier
 from wallwatch.state.models import Alert, OrderBookSnapshot, Trade, WallEvent
 
 
@@ -194,6 +195,22 @@ async def run_monitor_async(argv: list[str]) -> None:
         logger.error("config_error", extra={"error": str(exc)})
         sys.exit(1)
 
+    if config.telegram.enabled:
+        missing = []
+        if not settings.tg_bot_token:
+            missing.append("tg_bot_token")
+        if not settings.tg_chat_ids:
+            missing.append("tg_chat_id")
+        if missing:
+            logger.error(
+                "config_error",
+                extra={
+                    "error": "Missing required Telegram environment variables: "
+                    + ", ".join(missing)
+                },
+            )
+            sys.exit(1)
+
     detector_config = config.detector_config()
     depth = resolve_depth(args.depth, detector_config.depth)
     detector_config = DetectorConfig(**{**asdict(detector_config), "depth": depth})
@@ -231,6 +248,10 @@ async def run_monitor_async(argv: list[str]) -> None:
             "walls.consume_window_seconds": config.walls.consume_window_seconds,
             "walls.consume_drop_pct": config.walls.consume_drop_pct,
             "walls.teleport_reset": config.walls.teleport_reset,
+            "telegram.enabled": config.telegram.enabled,
+            "telegram.send_events": list(config.telegram.send_events),
+            "telegram.cooldown_seconds": config.telegram.cooldown_seconds,
+            "telegram.disable_web_preview": config.telegram.disable_web_preview,
             "dump.book_enabled": args.dump_book,
             "dump.book_interval_seconds": args.dump_book_interval,
             "dump.book_levels": args.dump_book_levels,
@@ -246,6 +267,7 @@ async def run_monitor_async(argv: list[str]) -> None:
         stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
         instrument_status=settings.instrument_status,
     )
+    telegram_notifier: TelegramNotifier | None = None
 
     resolved, failures = await client.resolve_instruments(symbols)
     for item in failures:
@@ -260,6 +282,19 @@ async def run_monitor_async(argv: list[str]) -> None:
             instrument_id=instrument.instrument_id,
             tick_size=instrument.tick_size,
             symbol=instrument.symbol,
+        )
+
+    instrument_by_symbol = {instrument.symbol: instrument for instrument in resolved}
+    if config.telegram.enabled:
+        telegram_notifier = TelegramNotifier(
+            token=settings.tg_bot_token or "",
+            chat_ids=settings.tg_chat_ids,
+            parse_mode=settings.tg_parse_mode,
+            disable_web_preview=config.telegram.disable_web_preview,
+            send_events=config.telegram.send_events,
+            cooldown_seconds=config.telegram.cooldown_seconds,
+            instrument_by_symbol=instrument_by_symbol,
+            logger=logger,
         )
 
     stop_event = asyncio.Event()
@@ -362,11 +397,17 @@ async def run_monitor_async(argv: list[str]) -> None:
                             snapshot, debug_interval
                         )
                         _log_wall_events(logger, events)
+                        if telegram_notifier is not None:
+                            for event in events:
+                                telegram_notifier.notify(event)
                         if debug_payload is not None:
                             logger.info("wall_debug", extra=debug_payload)
                         return alerts
                     alerts, events = detector.on_order_book_with_events(snapshot)
                     _log_wall_events(logger, events)
+                    if telegram_notifier is not None:
+                        for event in events:
+                            telegram_notifier.notify(event)
                     return alerts
 
                 def _on_trade(trade: Trade) -> list[Alert]:
@@ -398,6 +439,8 @@ async def run_monitor_async(argv: list[str]) -> None:
         heartbeat_task.cancel()
         if dump_task is not None:
             dump_task.cancel()
+        if telegram_notifier is not None:
+            await telegram_notifier.aclose()
 
 
 async def _run_orderbook_dump(

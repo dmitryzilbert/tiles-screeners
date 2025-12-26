@@ -131,6 +131,27 @@ walls:
     assert config.walls.candidate_ratio_to_median == 123.0
 
 
+def test_telegram_config_from_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+telegram:
+  enabled: true
+  send_events: [wall_candidate]
+  cooldown_seconds:
+    wall_candidate: 10
+  disable_web_preview: false
+""".lstrip()
+    )
+
+    config = load_app_config(config_path)
+
+    assert config.telegram.enabled is True
+    assert config.telegram.send_events == ("wall_candidate",)
+    assert config.telegram.cooldown_seconds["wall_candidate"] == 10.0
+    assert config.telegram.disable_web_preview is False
+
+
 def test_unknown_config_keys_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
