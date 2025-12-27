@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from urllib import request as urllib_request
 
 from wallwatch.app.commands import (
+    CommandResponse,
     TelegramCommandHandler,
     format_ping_response,
     format_status_response,
@@ -50,7 +51,13 @@ def test_telegram_api_client_mock_transport() -> None:
         api = TelegramApiClient("token", client, logger=logging.getLogger("test"))
         updates = await api.get_updates(offset=1, timeout=30)
         assert updates[0]["update_id"] == 10
-        await api.send_message(chat_id=1, text="hello", parse_mode="HTML", disable_web_preview=True)
+        await api.send_message(
+            chat_id=1,
+            text="hello",
+            parse_mode="HTML",
+            disable_web_preview=True,
+            reply_markup=None,
+        )
         assert any(req["type"] == "getUpdates" for req in client.requests)
         assert any(req["type"] == "sendMessage" for req in client.requests)
 
@@ -107,16 +114,20 @@ def test_watch_updates_symbols() -> None:
         manager=manager,
         max_symbols=10,
         allowed_user_ids=set(),
+        include_instrument_button=True,
+        instrument_button_text="Открыть в Т-Инвестициях",
+        append_security_share_utm=False,
         logger=logging.getLogger("test"),
         time_provider=time_provider,
     )
 
-    async def _run() -> str | None:
+    async def _run() -> CommandResponse | None:
         return await handler.handle_command("/watch SBER,GAZP", chat_id=1, user_id=2)
 
     response = asyncio.run(_run())
 
-    assert response == "watching: SBER, GAZP"
+    assert response is not None
+    assert response.text == "watching: SBER, GAZP"
     assert manager.updated == ["SBER", "GAZP"]
 
 
@@ -134,25 +145,30 @@ def test_start_and_help_responses() -> None:
         manager=manager,
         max_symbols=10,
         allowed_user_ids=set(),
+        include_instrument_button=True,
+        instrument_button_text="Открыть в Т-Инвестициях",
+        append_security_share_utm=False,
         logger=logging.getLogger("test"),
         time_provider=datetime.now,
     )
 
-    async def _run_start() -> str | None:
+    async def _run_start() -> CommandResponse | None:
         return await handler.handle_command("/start", chat_id=1, user_id=2)
 
-    async def _run_help() -> str | None:
+    async def _run_help() -> CommandResponse | None:
         return await handler.handle_command("/help", chat_id=1, user_id=2)
 
     start_response = asyncio.run(_run_start())
     help_response = asyncio.run(_run_help())
 
     assert start_response is not None
-    assert "Привет" in start_response
-    assert "/help" in start_response
+    assert start_response.text is not None
+    assert "Привет" in start_response.text
+    assert "/help" in start_response.text
     assert help_response is not None
-    assert "Привет" not in help_response
-    for text in (start_response, help_response):
+    assert help_response.text is not None
+    assert "Привет" not in help_response.text
+    for text in (start_response.text, help_response.text):
         assert "<symbols>" not in text
         assert "</symbols>" not in text
         tags = re.findall(r"</?([a-zA-Z0-9]+)>", text)
@@ -232,3 +248,87 @@ def test_telegram_poll_timeout_is_debug(caplog) -> None:
     records = asyncio.run(_run())
     assert any(record.message == "telegram_poll_timeout" for record in records)
     assert not any(record.message == "telegram_poll_failed" for record in records)
+
+
+def test_smoke_command_sends_message_with_button() -> None:
+    stop_event = asyncio.Event()
+
+    class SmokeApi:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def get_updates(self, offset: int | None, timeout: int) -> list[dict[str, object]]:
+            stop_event.set()
+            return [
+                {
+                    "update_id": 1,
+                    "message": {
+                        "text": "/smoke",
+                        "chat": {"id": 123},
+                        "from": {"id": 99},
+                    },
+                }
+            ]
+
+        async def send_message(
+            self,
+            *,
+            chat_id: int,
+            text: str,
+            parse_mode: str | None = None,
+            disable_web_preview: bool = True,
+            reply_markup: dict[str, object] | None = None,
+        ) -> None:
+            self.sent.append(
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "disable_web_preview": disable_web_preview,
+                    "reply_markup": reply_markup,
+                }
+            )
+
+    runtime_state = RuntimeState(
+        started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        pid=1,
+        current_symbols=["SBER"],
+        depth=20,
+    )
+    manager = FakeManager(symbols=["SBER"])
+    handler = TelegramCommandHandler(
+        runtime_state=runtime_state,
+        manager=manager,
+        max_symbols=10,
+        allowed_user_ids={99},
+        include_instrument_button=True,
+        instrument_button_text="Открыть в Т-Инвестициях",
+        append_security_share_utm=False,
+        logger=logging.getLogger("test"),
+        time_provider=datetime.now,
+    )
+    api = SmokeApi()
+
+    async def _run() -> None:
+        polling = TelegramPolling(
+            api=api,
+            command_handler=handler,
+            logger=logging.getLogger("telegram_polling_test"),
+            parse_mode="HTML",
+            disable_web_preview=True,
+            poll_interval_seconds=0,
+        )
+        await polling.run(stop_event)
+
+    asyncio.run(_run())
+
+    assert len(api.sent) == 1
+    sent = api.sent[0]
+    assert sent["chat_id"] == 123
+    assert sent["parse_mode"] == "HTML"
+    reply_markup = sent["reply_markup"]
+    assert reply_markup is not None
+    inline_keyboard = reply_markup["inline_keyboard"]
+    assert isinstance(inline_keyboard, list)
+    assert all(isinstance(row, list) for row in inline_keyboard)
+    assert inline_keyboard[0][0]["url"].endswith("/invest/stocks/VSEH/")

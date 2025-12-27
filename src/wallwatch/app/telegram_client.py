@@ -74,6 +74,7 @@ class TelegramApiClient:
         text: str,
         parse_mode: str | None = None,
         disable_web_preview: bool = True,
+        reply_markup: dict[str, Any] | None = None,
     ) -> None:
         payload: dict[str, Any] = {
             "chat_id": chat_id,
@@ -82,6 +83,8 @@ class TelegramApiClient:
         }
         if parse_mode:
             payload["parse_mode"] = parse_mode
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         await self._client.post_json(self._url("/sendMessage"), payload)
 
     def _url(self, path: str) -> str:
