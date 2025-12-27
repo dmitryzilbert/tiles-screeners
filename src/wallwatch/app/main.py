@@ -417,6 +417,7 @@ async def run_monitor_async(argv: list[str]) -> None:
                 include_instrument_button=config.telegram.include_instrument_button,
                 instrument_button_text=config.telegram.button_text,
                 append_security_share_utm=config.telegram.append_security_share_utm,
+                emit_event=telegram_notifier.notify_event if telegram_notifier else None,
                 logger=logger,
                 time_provider=datetime.now,
             )

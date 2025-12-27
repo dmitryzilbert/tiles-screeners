@@ -171,7 +171,7 @@ class MarketDataManager:
                     )
                 )
                 if self._notifier is not None:
-                    self._notifier.notify(event)
+                    self._notifier.notify_event(event)
 
         def _on_order_book(snapshot: OrderBookSnapshot) -> list[Alert]:
             _mark_connected()

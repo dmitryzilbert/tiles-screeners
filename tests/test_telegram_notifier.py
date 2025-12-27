@@ -143,6 +143,34 @@ def test_build_tinvest_url() -> None:
         )
         == "https://www.tbank.ru/invest/futures/USDRUBF/"
     )
+    assert (
+        build_tinvest_url(
+            "VSEH",
+            InstrumentInfo(
+                instrument_id="uid-6",
+                symbol="VSEH",
+                tick_size=0.01,
+                instrument_type=None,
+                ticker=None,
+                isin=None,
+            ),
+        )
+        == "https://www.tbank.ru/invest/stocks/VSEH/"
+    )
+    assert (
+        build_tinvest_url(
+            "RU0009029540",
+            InstrumentInfo(
+                instrument_id="uid-7",
+                symbol="RU0009029540",
+                tick_size=0.01,
+                instrument_type=schemas.InstrumentType.INSTRUMENT_TYPE_BOND,
+                ticker=None,
+                isin=None,
+            ),
+        )
+        == "https://www.tbank.ru/invest/bonds/RU0009029540/"
+    )
 
 
 def test_build_tinvest_url_fallback() -> None:
