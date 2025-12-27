@@ -9,9 +9,16 @@ from urllib import error as urllib_error
 
 
 class TelegramApiError(RuntimeError):
-    def __init__(self, message: str, *, description: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        description: str | None = None,
+        status_code: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.description = description
+        self.status_code = status_code
 
 
 class TelegramHttpClient(Protocol):
@@ -19,7 +26,13 @@ class TelegramHttpClient(Protocol):
         raise NotImplementedError
 
 
+DEFAULT_TELEGRAM_READ_TIMEOUT = 45
+
+
 class UrllibTelegramHttpClient:
+    def __init__(self, *, read_timeout: int = DEFAULT_TELEGRAM_READ_TIMEOUT) -> None:
+        self._read_timeout = read_timeout
+
     async def post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         data = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json; charset=utf-8"}
@@ -27,12 +40,14 @@ class UrllibTelegramHttpClient:
 
         def _do_request() -> dict[str, Any]:
             try:
-                with urllib_request.urlopen(req, timeout=30) as response:
+                with urllib_request.urlopen(req, timeout=self._read_timeout) as response:
                     payload_data = response.read()
                     return json.loads(payload_data.decode("utf-8"))
             except urllib_error.HTTPError as exc:
                 description = _extract_description(exc)
-                raise TelegramApiError(f"HTTP {exc.code}", description=description) from exc
+                raise TelegramApiError(
+                    f"HTTP {exc.code}", description=description, status_code=exc.code
+                ) from exc
 
         return await asyncio.to_thread(_do_request)
 
