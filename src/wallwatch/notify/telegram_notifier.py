@@ -24,44 +24,66 @@ _EVENT_TITLES = {
     "wall_lost": "⛔ WALL LOST",
 }
 
+_TINVEST_BASE_URL = "https://www.tbank.ru"
+_SECURITY_SHARE_UTM = "utm_source=security_share"
 
-def build_inline_keyboard(url: str) -> dict[str, Any]:
-    return {"inline_keyboard": [[{"text": "Открыть в Т-Инвестициях", "url": url}]]}
+
+def build_inline_keyboard(url: str, button_text: str) -> dict[str, Any]:
+    return {"inline_keyboard": [[{"text": button_text, "url": url}]]}
 
 
-def build_instrument_url(instrument: InstrumentInfo | None) -> str | None:
+def build_tinvest_url(
+    instrument: InstrumentInfo | None,
+    *,
+    append_security_share_utm: bool = False,
+) -> str | None:
     if instrument is None:
         return None
-    return build_instrument_url_parts(
+    return build_tinvest_url_parts(
         instrument.instrument_type,
         ticker=instrument.ticker,
         isin=instrument.isin,
+        append_security_share_utm=append_security_share_utm,
     )
 
 
-def build_instrument_url_parts(
+def build_tinvest_url_parts(
     instrument_type: schemas.InstrumentType | None,
     *,
     ticker: str | None,
     isin: str | None,
+    append_security_share_utm: bool = False,
 ) -> str | None:
+    path: str | None = None
+    identifier = None
     if instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_SHARE:
-        return f"https://www.tbank.ru/invest/stocks/{ticker}/" if ticker else None
-    if instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_BOND:
-        return f"https://www.tbank.ru/invest/bonds/{isin}/" if isin else None
-    if instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_ETF:
-        if not ticker:
-            return None
-        encoded = quote(ticker, safe="")
-        return f"https://www.tbank.ru/invest/etfs/{encoded}/"
-    if instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_FUTURES:
-        return f"https://www.tbank.ru/invest/futures/{ticker}/" if ticker else None
-    if instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_CURRENCY:
-        return f"https://www.tbank.ru/invest/currencies/{ticker}/" if ticker else None
-    return None
+        identifier = ticker
+        path = "/invest/stocks/{identifier}/"
+    elif instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_ETF:
+        identifier = ticker
+        path = "/invest/etfs/{identifier}/"
+    elif instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_BOND:
+        identifier = isin or ticker
+        path = "/invest/bonds/{identifier}/"
+    elif instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_CURRENCY:
+        identifier = ticker
+        path = "/invest/currencies/{identifier}/"
+    elif instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_FUTURES:
+        identifier = ticker
+        path = "/invest/futures/{identifier}/"
+    elif instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_INDEX:
+        identifier = ticker
+        path = "/invest/indexes/{identifier}/"
+    if not identifier or not path:
+        return None
+    encoded = quote(identifier, safe="")
+    url = f"{_TINVEST_BASE_URL}{path.format(identifier=encoded)}"
+    if append_security_share_utm:
+        return f"{url}?{_SECURITY_SHARE_UTM}"
+    return url
 
 
-def format_event_message(event: WallEvent, instrument_url: str | None) -> str:
+def format_event_message(event: WallEvent) -> str:
     title = _EVENT_TITLES.get(event.event, event.event.upper())
     distance_ticks = (
         str(event.distance_ticks_to_spread)
@@ -79,9 +101,6 @@ def format_event_message(event: WallEvent, instrument_url: str | None) -> str:
         f"<b>Dwell:</b> {_format_decimal(event.dwell_seconds, digits=1)}s",
         f"<b>Qty change:</b> {_format_signed(event.qty_change_last_interval)}",
     ]
-    if instrument_url:
-        link = html.escape(instrument_url, quote=True)
-        lines.append(f'<a href="{link}">Открыть в Т-Инвестициях</a>')
     return "\n".join(lines)
 
 
@@ -111,6 +130,9 @@ class TelegramNotifier:
         send_events: Iterable[str],
         cooldown_seconds: dict[str, float],
         instrument_by_symbol: dict[str, InstrumentInfo],
+        include_instrument_button: bool,
+        instrument_button_text: str,
+        append_security_share_utm: bool,
         logger: logging.Logger,
         time_provider: Callable[[], float] = time.monotonic,
         queue_maxsize: int = 1000,
@@ -124,6 +146,9 @@ class TelegramNotifier:
         self._send_events = set(send_events)
         self._cooldown_seconds = dict(cooldown_seconds)
         self._instrument_by_symbol = instrument_by_symbol
+        self._include_instrument_button = include_instrument_button
+        self._instrument_button_text = instrument_button_text
+        self._append_security_share_utm = append_security_share_utm
         self._logger = logger
         self._time_provider = time_provider
         self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=queue_maxsize)
@@ -140,15 +165,21 @@ class TelegramNotifier:
         if not self._cooldown_allows(event):
             return
         instrument = self._instrument_by_symbol.get(event.symbol)
-        instrument_url = build_instrument_url(instrument)
-        text = format_event_message(event, instrument_url)
+        instrument_url = build_tinvest_url(
+            instrument,
+            append_security_share_utm=self._append_security_share_utm,
+        )
+        text = format_event_message(event)
         payload: dict[str, Any] = {
             "text": text,
             "parse_mode": self._parse_mode,
             "disable_web_page_preview": self._disable_web_preview,
         }
-        if instrument_url:
-            payload["reply_markup"] = build_inline_keyboard(instrument_url)
+        if instrument_url and self._include_instrument_button:
+            payload["reply_markup"] = build_inline_keyboard(
+                instrument_url,
+                self._instrument_button_text,
+            )
         self._enqueue(payload)
 
     def close(self) -> None:

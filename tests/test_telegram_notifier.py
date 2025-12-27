@@ -8,7 +8,8 @@ from t_tech.invest import schemas
 from wallwatch.api.client import InstrumentInfo
 from wallwatch.notify.telegram_notifier import (
     build_inline_keyboard,
-    build_instrument_url_parts,
+    build_tinvest_url,
+    build_tinvest_url_parts,
     format_event_message,
     TelegramNotifier,
 )
@@ -33,9 +34,9 @@ def _event(**overrides: object) -> WallEvent:
     return WallEvent(**data)
 
 
-def test_build_instrument_url_parts() -> None:
+def test_build_tinvest_url_parts() -> None:
     assert (
-        build_instrument_url_parts(
+        build_tinvest_url_parts(
             schemas.InstrumentType.INSTRUMENT_TYPE_SHARE,
             ticker="SBER",
             isin=None,
@@ -43,7 +44,7 @@ def test_build_instrument_url_parts() -> None:
         == "https://www.tbank.ru/invest/stocks/SBER/"
     )
     assert (
-        build_instrument_url_parts(
+        build_tinvest_url_parts(
             schemas.InstrumentType.INSTRUMENT_TYPE_BOND,
             ticker=None,
             isin="RU000A0JX0J2",
@@ -51,7 +52,7 @@ def test_build_instrument_url_parts() -> None:
         == "https://www.tbank.ru/invest/bonds/RU000A0JX0J2/"
     )
     assert (
-        build_instrument_url_parts(
+        build_tinvest_url_parts(
             schemas.InstrumentType.INSTRUMENT_TYPE_ETF,
             ticker="TST@ETF",
             isin=None,
@@ -59,7 +60,7 @@ def test_build_instrument_url_parts() -> None:
         == "https://www.tbank.ru/invest/etfs/TST%40ETF/"
     )
     assert (
-        build_instrument_url_parts(
+        build_tinvest_url_parts(
             schemas.InstrumentType.INSTRUMENT_TYPE_FUTURES,
             ticker="SiZ3",
             isin=None,
@@ -67,7 +68,7 @@ def test_build_instrument_url_parts() -> None:
         == "https://www.tbank.ru/invest/futures/SiZ3/"
     )
     assert (
-        build_instrument_url_parts(
+        build_tinvest_url_parts(
             schemas.InstrumentType.INSTRUMENT_TYPE_CURRENCY,
             ticker="USD000UTSTOM",
             isin=None,
@@ -76,9 +77,71 @@ def test_build_instrument_url_parts() -> None:
     )
 
 
-def test_format_event_message_contains_fields_and_link() -> None:
-    url = "https://www.tbank.ru/invest/stocks/SBER/"
-    message = format_event_message(_event(), url)
+def test_build_tinvest_url() -> None:
+    assert (
+        build_tinvest_url(
+            InstrumentInfo(
+                instrument_id="uid-1",
+                symbol="SBER",
+                tick_size=0.01,
+                instrument_type=schemas.InstrumentType.INSTRUMENT_TYPE_SHARE,
+                ticker="SBER",
+            )
+        )
+        == "https://www.tbank.ru/invest/stocks/SBER/"
+    )
+    assert (
+        build_tinvest_url(
+            InstrumentInfo(
+                instrument_id="uid-2",
+                symbol="FXRL",
+                tick_size=0.01,
+                instrument_type=schemas.InstrumentType.INSTRUMENT_TYPE_ETF,
+                ticker="FXRL",
+            )
+        )
+        == "https://www.tbank.ru/invest/etfs/FXRL/"
+    )
+    assert (
+        build_tinvest_url(
+            InstrumentInfo(
+                instrument_id="uid-3",
+                symbol="RU000A107U81",
+                tick_size=0.01,
+                instrument_type=schemas.InstrumentType.INSTRUMENT_TYPE_BOND,
+                isin="RU000A107U81",
+            )
+        )
+        == "https://www.tbank.ru/invest/bonds/RU000A107U81/"
+    )
+    assert (
+        build_tinvest_url(
+            InstrumentInfo(
+                instrument_id="uid-4",
+                symbol="USDRUB",
+                tick_size=0.01,
+                instrument_type=schemas.InstrumentType.INSTRUMENT_TYPE_CURRENCY,
+                ticker="USDRUB",
+            )
+        )
+        == "https://www.tbank.ru/invest/currencies/USDRUB/"
+    )
+    assert (
+        build_tinvest_url(
+            InstrumentInfo(
+                instrument_id="uid-5",
+                symbol="USDRUBF",
+                tick_size=0.01,
+                instrument_type=schemas.InstrumentType.INSTRUMENT_TYPE_FUTURES,
+                ticker="USDRUBF",
+            )
+        )
+        == "https://www.tbank.ru/invest/futures/USDRUBF/"
+    )
+
+
+def test_format_event_message_contains_fields() -> None:
+    message = format_event_message(_event())
     assert "WALL CONFIRMED" in message
     assert "Symbol" in message
     assert "Side" in message
@@ -88,12 +151,11 @@ def test_format_event_message_contains_fields_and_link() -> None:
     assert "Distance to spread" in message
     assert "Dwell" in message
     assert "Qty change" in message
-    assert url in message
 
 
 def test_build_inline_keyboard() -> None:
     url = "https://www.tbank.ru/invest/stocks/SBER/"
-    keyboard = build_inline_keyboard(url)
+    keyboard = build_inline_keyboard(url, "Открыть в Т-Инвестициях")
     assert keyboard["inline_keyboard"] == [[{"text": "Открыть в Т-Инвестициях", "url": url}]]
 
 
@@ -111,6 +173,9 @@ def test_cooldown_prevents_duplicate_events() -> None:
         send_events=["wall_confirmed"],
         cooldown_seconds={"wall_confirmed": 60.0},
         instrument_by_symbol={},
+        include_instrument_button=True,
+        instrument_button_text="Открыть в Т-Инвестициях",
+        append_security_share_utm=False,
         logger=logging.getLogger("test"),
         time_provider=_time,
         start_worker=False,
@@ -150,6 +215,9 @@ def test_send_message_payload() -> None:
             send_events=["wall_confirmed"],
             cooldown_seconds={"wall_confirmed": 0.0},
             instrument_by_symbol={"SBER": instrument},
+            include_instrument_button=True,
+            instrument_button_text="Открыть в Т-Инвестициях",
+            append_security_share_utm=False,
             logger=logging.getLogger("test"),
             send_func=_send,
         )
@@ -165,4 +233,7 @@ def test_send_message_payload() -> None:
     assert payload["parse_mode"] == "HTML"
     assert payload["disable_web_page_preview"] is True
     assert "reply_markup" in payload
-    assert payload["reply_markup"]["inline_keyboard"][0][0]["url"].endswith("/SBER/")
+    inline_keyboard = payload["reply_markup"]["inline_keyboard"]
+    assert isinstance(inline_keyboard, list)
+    assert all(isinstance(row, list) for row in inline_keyboard)
+    assert inline_keyboard[0][0]["url"].endswith("/SBER/")
