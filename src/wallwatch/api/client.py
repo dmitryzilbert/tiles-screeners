@@ -10,10 +10,14 @@ from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable, Iterable, Optional
 
 import grpc
-from t_tech.invest import AsyncClient, MarketDataRequest, SubscriptionAction
+from t_tech.invest import MarketDataRequest, SubscriptionAction
 from t_tech.invest import schemas
+from t_tech.invest.async_services import AsyncServices
+from t_tech.invest.clients import async_init_error_hub
+from t_tech.invest.constants import INVEST_GRPC_API
 from t_tech.invest.services import InstrumentsService
 from t_tech.invest.utils import quotation_to_decimal
+from t_tech.invest import channels as invest_channels
 from t_tech.invest import (
     OrderBookInstrument,
     SubscribeOrderBookRequest,
@@ -55,6 +59,10 @@ _KIND_RANKS = {
     schemas.InstrumentType.INSTRUMENT_TYPE_COMMODITY: 9,
     schemas.InstrumentType.INSTRUMENT_TYPE_UNSPECIFIED: 10,
 }
+_TLS_HINT = (
+    "Укажи ca_bundle_path (PEM) или установи GRPC_DEFAULT_SSL_ROOTS_FILE_PATH. "
+    "Для РФ может понадобиться бандл НУЦ Минцифры."
+)
 
 
 def _quotation_to_float(value) -> float:
@@ -95,6 +103,7 @@ class MarketDataClient:
         stream_idle_sleep_seconds: float = 3600.0,
         instrument_status: schemas.InstrumentStatus | None = schemas.InstrumentStatus.INSTRUMENT_STATUS_BASE,
         endpoint: str | None = None,
+        telegram_enabled: bool = False,
     ) -> None:
         self._token = token
         self._logger = logger
@@ -102,6 +111,7 @@ class MarketDataClient:
         self._stream_idle_sleep_seconds = stream_idle_sleep_seconds
         self._instrument_status = instrument_status
         self._endpoint = endpoint
+        self._telegram_enabled = telegram_enabled
 
     async def resolve_instruments(self, symbols: Iterable[str]) -> tuple[list[InstrumentInfo], list[str]]:
         resolved: list[InstrumentInfo] = []
@@ -118,6 +128,8 @@ class MarketDataClient:
                     )
                     continue
                 except Exception as exc:  # noqa: BLE001
+                    if self._maybe_log_tls_error(exc):
+                        raise
                     self._logger.warning(
                         "instrument_resolve_failed",
                         extra={"symbol": symbol, "error": str(exc)},
@@ -288,6 +300,10 @@ class MarketDataClient:
             except asyncio.CancelledError:
                 self._logger.info({"message": "shutdown", "reason": "cancelled"})
                 return
+            except Exception as exc:  # noqa: BLE001
+                if self._maybe_log_tls_error(exc):
+                    raise
+                raise
 
     async def get_order_book(
         self,
@@ -295,10 +311,15 @@ class MarketDataClient:
         depth: int,
     ) -> OrderBookSnapshot | None:
         async with self._client() as client:
-            response = await client.market_data.get_order_book(
-                instrument_id=instrument_id,
-                depth=depth,
-            )
+            try:
+                response = await client.market_data.get_order_book(
+                    instrument_id=instrument_id,
+                    depth=depth,
+                )
+            except Exception as exc:  # noqa: BLE001
+                if self._maybe_log_tls_error(exc):
+                    raise
+                raise
         return self._map_order_book(response)
 
     def _subscription_requests(
@@ -396,15 +417,64 @@ class MarketDataClient:
         )
 
     @asynccontextmanager
-    async def _client(self) -> AsyncIterator[AsyncClient]:
-        kwargs, channel = self._client_kwargs()
-        async with AsyncClient(self._token, **kwargs) as client:
-            yield client
-        if channel is not None:
-            await channel.close()
+    async def _client(self) -> AsyncIterator[AsyncServices]:
+        target = self._endpoint or INVEST_GRPC_API
+        await async_init_error_hub(_ErrorHubTarget(target))
+        channel = create_grpc_channel(
+            target=target,
+            root_certificates=self._root_certificates,
+            force_async=True,
+        )
+        try:
+            await channel.__aenter__()
+            yield AsyncServices(channel, token=self._token)
+        finally:
+            await channel.__aexit__(None, None, None)
 
-    def _client_kwargs(self) -> tuple[dict[str, object], grpc.aio.Channel | None]:
-        kwargs: dict[str, object] = {}
-        if self._endpoint:
-            kwargs["target"] = self._endpoint
-        return kwargs, None
+    def _maybe_log_tls_error(self, exc: Exception) -> bool:
+        if not _is_certificate_verify_error(exc):
+            return False
+        self._logger.error(
+            "grpc_tls_verify_failed",
+            extra={
+                "endpoint": self._endpoint,
+                "telegram_enabled": self._telegram_enabled,
+                "hint": _TLS_HINT,
+            },
+        )
+        return True
+
+
+@dataclass(frozen=True)
+class _ErrorHubTarget:
+    _target: str
+
+
+def create_grpc_channel(
+    *,
+    target: str,
+    root_certificates: bytes | None = None,
+    options: list[tuple[str, Any]] | None = None,
+    force_async: bool = False,
+    interceptors: list[Any] | None = None,
+) -> grpc.Channel | grpc.aio.Channel:
+    creds = grpc.ssl_channel_credentials(root_certificates=root_certificates)
+    options = options or []
+    options = invest_channels._with_options(options, invest_channels._required_options)
+    args = (target, creds, options, None)
+    if force_async:
+        return grpc.aio.secure_channel(*args, interceptors=interceptors)
+    return grpc.secure_channel(*args)
+
+
+def _is_certificate_verify_error(exc: Exception) -> bool:
+    message = str(exc)
+    if isinstance(exc, grpc.RpcError):
+        try:
+            details = exc.details()
+        except Exception:  # noqa: BLE001
+            details = None
+        if details:
+            message = f"{message} {details}"
+    lowered = message.lower()
+    return "certificate_verify_failed" in lowered or "certificate verify failed" in lowered

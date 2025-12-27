@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import time
+import socket
 from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
@@ -18,12 +19,12 @@ from wallwatch.api.client import InstrumentInfo, MarketDataClient
 from wallwatch.app.config import (
     CABundleError,
     ConfigError,
-    configure_grpc_root_certificates,
     ensure_required_env,
     DEFAULT_GRPC_ENDPOINT,
     load_app_config,
     load_env_settings,
     missing_required_env,
+    resolve_ca_bundle_config,
     resolve_grpc_endpoint,
     resolve_depth,
     resolve_log_level,
@@ -89,6 +90,20 @@ def _load_dotenv() -> None:
 
 def _parse_symbols(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _split_grpc_target(target: str) -> tuple[str | None, int | None]:
+    if not target:
+        return None, None
+    host = target
+    port = None
+    if ":" in target:
+        host_part, port_part = target.rsplit(":", 1)
+        if host_part:
+            host = host_part
+        if port_part.isdigit():
+            port = int(port_part)
+    return host or None, port
 
 
 def _build_run_parser() -> argparse.ArgumentParser:
@@ -220,7 +235,7 @@ async def run_monitor_async(argv: list[str]) -> None:
     )
 
     try:
-        configure_grpc_root_certificates(settings, logger)
+        ca_bundle = resolve_ca_bundle_config(settings, config)
     except CABundleError as exc:
         logger.error("config_error", extra={"error": str(exc)})
         sys.exit(1)
@@ -233,6 +248,9 @@ async def run_monitor_async(argv: list[str]) -> None:
             "logging.level": log_level,
             "marketdata.depth": detector_config.depth,
             "grpc.endpoint": grpc_endpoint,
+            "grpc.ca_bundle_path": ca_bundle.path,
+            "grpc.ca_bundle_source": ca_bundle.source,
+            "grpc.ca_bundle_status": ca_bundle.status,
             "debug.walls_enabled": debug_enabled,
             "debug.walls_interval_seconds": debug_interval,
             "walls.top_n_levels": config.walls.top_n_levels,
@@ -264,10 +282,11 @@ async def run_monitor_async(argv: list[str]) -> None:
     client = MarketDataClient(
         token=settings.token or "",
         logger=logger,
-        root_certificates=None,
+        root_certificates=ca_bundle.data,
         stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
         instrument_status=settings.instrument_status,
         endpoint=grpc_endpoint,
+        telegram_enabled=config.telegram.enabled,
     )
     telegram_notifier: TelegramNotifier | None = None
 
@@ -571,25 +590,47 @@ async def build_doctor_report(
         grpc_endpoint = resolve_grpc_endpoint(settings, logger)
     report.append(("grpc_endpoint", True, f"Endpoint: {grpc_endpoint}"))
 
+    config = None
     try:
-        _ = load_app_config(config_path)
+        config = load_app_config(config_path)
         report.append(("config", True, "Config loaded"))
     except ConfigError as exc:
         report.append(("config", False, str(exc)))
         fatal = True
 
-    grpc_ca_path = None
+    grpc_host, grpc_port = _split_grpc_target(grpc_endpoint)
+    if grpc_host:
+        try:
+            socket.getaddrinfo(grpc_host, grpc_port or 443)
+        except OSError as exc:
+            report.append(("grpc_dns", False, f"DNS resolve failed: {exc}"))
+        else:
+            report.append(("grpc_dns", True, f"Resolved {grpc_host}"))
+
+    grpc_env_roots = os.getenv("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH")
+    if grpc_env_roots:
+        report.append(
+            (
+                "grpc_env_roots",
+                True,
+                f"GRPC_DEFAULT_SSL_ROOTS_FILE_PATH={grpc_env_roots}",
+            )
+        )
+
+    ca_bundle = None
     if settings is not None:
         try:
-            grpc_ca_path = configure_grpc_root_certificates(settings, logger)
-            if grpc_ca_path:
+            ca_bundle = resolve_ca_bundle_config(settings, config)
+            if ca_bundle.path:
                 report.append(
                     (
                         "ca_bundle",
                         True,
-                        f"Using GRPC_DEFAULT_SSL_ROOTS_FILE_PATH={grpc_ca_path}",
+                        f"Using {ca_bundle.source} ca_bundle_path={ca_bundle.path}",
                     )
                 )
+            elif settings.ca_bundle_b64:
+                report.append(("ca_bundle", True, "Using CA bundle from env (base64)"))
             else:
                 report.append(("ca_bundle", True, "Using system/available CA bundle"))
         except CABundleError as exc:
@@ -601,10 +642,11 @@ async def build_doctor_report(
         client = MarketDataClient(
             token=settings.token or "",
             logger=logger,
-            root_certificates=None,
+            root_certificates=None if ca_bundle is None else ca_bundle.data,
             stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
             instrument_status=settings.instrument_status,
             endpoint=grpc_endpoint,
+            telegram_enabled=False if config is None else config.telegram.enabled,
         )
         try:
             resolved, failures = await client.resolve_instruments(grpc_symbols)

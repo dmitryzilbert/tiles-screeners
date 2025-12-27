@@ -25,6 +25,14 @@ class CABundleError(ValueError):
 
 
 @dataclass(frozen=True)
+class CABundleConfig:
+    path: str | None
+    source: str
+    status: str
+    data: bytes | None
+
+
+@dataclass(frozen=True)
 class EnvSettings:
     token: str | None
     ca_bundle_path: str | None
@@ -71,6 +79,11 @@ class DebugConfig:
 
 
 @dataclass(frozen=True)
+class GrpcConfig:
+    ca_bundle_path: str | None = None
+
+
+@dataclass(frozen=True)
 class TelegramConfig:
     enabled: bool = False
     polling: bool = True
@@ -99,6 +112,7 @@ class TelegramConfig:
 @dataclass(frozen=True)
 class AppConfig:
     logging: LoggingConfig = LoggingConfig()
+    grpc: GrpcConfig = GrpcConfig()
     marketdata: MarketDataConfig = MarketDataConfig()
     walls: WallsConfig = WallsConfig()
     debug: DebugConfig = DebugConfig()
@@ -287,6 +301,28 @@ def load_ca_bundle(settings: EnvSettings) -> bytes | None:
     return None
 
 
+def resolve_ca_bundle_config(
+    settings: EnvSettings, config: AppConfig | None
+) -> CABundleConfig:
+    if settings.ca_bundle_b64:
+        data = _load_ca_bundle_b64(settings.ca_bundle_b64)
+        return CABundleConfig(path=None, source="env", status="ok", data=data)
+
+    path = settings.ca_bundle_path
+    source = "env"
+    if path is None and config is not None and config.grpc.ca_bundle_path:
+        path = config.grpc.ca_bundle_path
+        source = "config"
+
+    if path:
+        status, data, error = _inspect_ca_bundle_path(path)
+        if status != "ok":
+            raise CABundleError(error or f"Invalid ca_bundle_path: {path}")
+        return CABundleConfig(path=path, source=source, status=status, data=data)
+
+    return CABundleConfig(path=None, source="default", status="ok", data=None)
+
+
 def resolve_root_certificates(settings: EnvSettings) -> bytes | None:
     bundle = load_ca_bundle(settings)
     if bundle is not None:
@@ -318,20 +354,27 @@ def _load_ca_bundle_b64(value: str) -> bytes:
 
 
 def _load_ca_bundle_path(value: str) -> bytes:
+    status, data, error = _inspect_ca_bundle_path(value)
+    if status != "ok":
+        raise CABundleError(error or f"Invalid tinvest_ca_bundle_path: {value}")
+    return data or b""
+
+
+def _inspect_ca_bundle_path(value: str) -> tuple[str, bytes | None, str | None]:
     path = Path(value)
     if not path.exists():
-        raise CABundleError(f"tinvest_ca_bundle_path not found: {path}")
+        return "missing", None, f"tinvest_ca_bundle_path not found: {path}"
     if not path.is_file():
-        raise CABundleError(f"tinvest_ca_bundle_path is not a file: {path}")
+        return "missing", None, f"tinvest_ca_bundle_path is not a file: {path}"
     try:
         data = path.read_bytes()
-    except OSError as exc:
-        raise CABundleError(f"tinvest_ca_bundle_path is not readable: {path}") from exc
+    except OSError:
+        return "missing", None, f"tinvest_ca_bundle_path is not readable: {path}"
     if not data:
-        raise CABundleError(f"tinvest_ca_bundle_path is empty: {path}")
+        return "empty", None, f"tinvest_ca_bundle_path is empty: {path}"
     if not _looks_like_pem(data):
-        raise CABundleError(f"tinvest_ca_bundle_path does not look like PEM: {path}")
-    return data
+        return "missing", None, f"tinvest_ca_bundle_path does not look like PEM: {path}"
+    return "ok", data, None
 
 
 def _write_temp_pem(data: bytes) -> str:
@@ -538,18 +581,21 @@ def _parse_app_config(raw: dict[str, Any]) -> AppConfig:
         return _parse_legacy_detector_config(raw)
 
     logging_section = _get_section(raw, "logging")
+    grpc_section = _get_section(raw, "grpc")
     marketdata_section = _get_section(raw, "marketdata")
     walls_section = _get_section(raw, "walls")
     debug_section = _get_section(raw, "debug")
     telegram_section = _get_section(raw, "telegram")
 
     logging_config = _parse_logging_config(logging_section)
+    grpc_config = _parse_grpc_config(grpc_section)
     marketdata_config = _parse_marketdata_config(marketdata_section)
     walls_config = _parse_walls_config(walls_section)
     debug_config = _parse_debug_config(debug_section)
     telegram_config = _parse_telegram_config(telegram_section)
     return AppConfig(
         logging=logging_config,
+        grpc=grpc_config,
         marketdata=marketdata_config,
         walls=walls_config,
         debug=debug_config,
@@ -558,7 +604,9 @@ def _parse_app_config(raw: dict[str, Any]) -> AppConfig:
 
 
 def _has_config_sections(raw: dict[str, Any]) -> bool:
-    return any(key in raw for key in ("logging", "marketdata", "walls", "debug", "telegram"))
+    return any(
+        key in raw for key in ("logging", "grpc", "marketdata", "walls", "debug", "telegram")
+    )
 
 
 def _parse_legacy_detector_config(raw: dict[str, Any]) -> AppConfig:
@@ -609,6 +657,15 @@ def _parse_logging_config(raw: dict[str, Any]) -> LoggingConfig:
     if level is None:
         return LoggingConfig()
     return LoggingConfig(level=_parse_log_level_value(level, "logging.level"))
+
+
+def _parse_grpc_config(raw: dict[str, Any]) -> GrpcConfig:
+    if not raw:
+        return GrpcConfig()
+    ca_bundle_path = raw.get("ca_bundle_path")
+    if ca_bundle_path is None:
+        return GrpcConfig()
+    return GrpcConfig(ca_bundle_path=_parse_optional_str_value(ca_bundle_path, "grpc.ca_bundle_path"))
 
 
 def _parse_marketdata_config(raw: dict[str, Any]) -> MarketDataConfig:
@@ -814,13 +871,14 @@ def _collect_unknown_keys(raw: dict[str, Any]) -> list[str]:
         return sorted(set(raw.keys()) - set(DetectorConfig.__dataclass_fields__.keys()))
 
     unknown: list[str] = []
-    top_level_allowed = {"logging", "marketdata", "walls", "debug", "telegram"}
+    top_level_allowed = {"logging", "grpc", "marketdata", "walls", "debug", "telegram"}
     for key in raw.keys():
         if key not in top_level_allowed:
             unknown.append(key)
 
     section_allowed = {
         "logging": {"level"},
+        "grpc": {"ca_bundle_path"},
         "marketdata": {"depth"},
         "walls": {
             "top_n_levels",
@@ -889,6 +947,15 @@ def _parse_int_value(value: Any, name: str) -> int:
 def _parse_str_value(value: Any, name: str) -> str:
     if isinstance(value, str):
         return value
+    raise ConfigError(f"{name} must be a string")
+
+
+def _parse_optional_str_value(value: Any, name: str) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
     raise ConfigError(f"{name} must be a string")
 
 

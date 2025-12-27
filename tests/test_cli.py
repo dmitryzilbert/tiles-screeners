@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import os
 from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 
 from wallwatch.app import main as app_main
-from wallwatch.app.config import AppConfig
+from wallwatch.app.config import AppConfig, CABundleConfig
 from wallwatch.api.client import InstrumentInfo
 
 
@@ -45,10 +44,12 @@ def test_build_doctor_report_uses_default_symbols(monkeypatch: pytest.MonkeyPatc
 
     assert captured["symbols"] == app_main.DEFAULT_DOCTOR_SYMBOLS
     assert not fatal
-    assert any(name == "ca_bundle" and ok for name, ok, _ in report)
+    assert any(
+        name == "ca_bundle" and ok and "base64" in message for name, ok, message in report
+    )
 
 
-def test_build_doctor_report_sets_grpc_env_var_for_ca_bundle_path(
+def test_build_doctor_report_uses_env_ca_bundle_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -57,7 +58,6 @@ def test_build_doctor_report_sets_grpc_env_var_for_ca_bundle_path(
     ca_path = tmp_path / "bundle.pem"
     ca_path.write_text(pem)
     monkeypatch.setenv("TINVEST_CA_BUNDLE_PATH", str(ca_path))
-    monkeypatch.delenv("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH", raising=False)
 
     async def fake_resolve(
         self: app_main.MarketDataClient, symbols: list[str]
@@ -69,11 +69,37 @@ def test_build_doctor_report_sets_grpc_env_var_for_ca_bundle_path(
     report, fatal = asyncio.run(app_main.build_doctor_report([], None))
 
     assert not fatal
-    assert os.environ.get("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH") == str(ca_path)
     assert any(
         name == "ca_bundle"
         and ok
-        and f"GRPC_DEFAULT_SSL_ROOTS_FILE_PATH={ca_path}" in message
+        and f"ca_bundle_path={ca_path}" in message
+        for name, ok, message in report
+    )
+
+
+@pytest.mark.parametrize("filename, content, match", [
+    ("missing.pem", None, "not found"),
+    ("empty.pem", "", "empty"),
+])
+def test_build_doctor_report_fails_for_invalid_ca_bundle_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    filename: str,
+    content: str | None,
+    match: str,
+) -> None:
+    monkeypatch.setenv("tinvest_token", "token")
+    ca_path = tmp_path / filename
+    if content is not None:
+        ca_path.write_text(content)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"grpc:\n  ca_bundle_path: {ca_path}\n")
+
+    report, fatal = asyncio.run(app_main.build_doctor_report([], config_path))
+
+    assert fatal
+    assert any(
+        name == "ca_bundle" and not ok and match in message
         for name, ok, message in report
     )
 
@@ -94,7 +120,11 @@ def test_run_monitor_async_windows_skips_signal_handlers(
     )
     monkeypatch.setattr(app_main, "load_env_settings", lambda: settings)
     monkeypatch.setattr(app_main, "ensure_required_env", lambda _: None)
-    monkeypatch.setattr(app_main, "configure_grpc_root_certificates", lambda *_: None)
+    monkeypatch.setattr(
+        app_main,
+        "resolve_ca_bundle_config",
+        lambda *_: CABundleConfig(path=None, source="default", status="ok", data=None),
+    )
     monkeypatch.setattr(app_main, "load_app_config", lambda _: AppConfig())
 
     class DummyClient:
