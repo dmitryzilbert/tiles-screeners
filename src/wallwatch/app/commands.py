@@ -8,11 +8,6 @@ from typing import Any, Callable, Iterable
 
 from wallwatch.app.market_data_manager import MarketDataManager
 from wallwatch.app.runtime_state import RuntimeState, RuntimeStateSnapshot, WallEventState
-from wallwatch.notify.telegram_notifier import (
-    build_inline_keyboard,
-    build_tinvest_url,
-    format_event_message,
-)
 from wallwatch.state.models import Side, WallEvent
 
 
@@ -130,6 +125,7 @@ class TelegramCommandHandler:
         include_instrument_button: bool,
         instrument_button_text: str,
         append_security_share_utm: bool,
+        emit_event: Callable[[WallEvent], None] | None,
         logger: logging.Logger,
         time_provider: Callable[[timezone], datetime] = datetime.now,
     ) -> None:
@@ -140,6 +136,7 @@ class TelegramCommandHandler:
         self._include_instrument_button = include_instrument_button
         self._instrument_button_text = instrument_button_text
         self._append_security_share_utm = append_security_share_utm
+        self._emit_event = emit_event
         self._logger = logger
         self._time_provider = time_provider
 
@@ -206,8 +203,10 @@ class TelegramCommandHandler:
                 return CommandResponse(text=f"removed: {html_escape(', '.join(removed))} (idle)")
             return CommandResponse(text=f"removed: {html_escape(', '.join(removed))}")
         if parsed.name == "smoke":
-            smoke = self._build_smoke_message()
-            return CommandResponse(text=None, messages=[smoke])
+            if self._emit_event is None:
+                return CommandResponse(text="smoke disabled")
+            self._emit_event(self._build_smoke_event())
+            return CommandResponse(text=None)
         return CommandResponse(text="Unknown command. Use /help.")
 
     def _start_text(self) -> str:
@@ -230,8 +229,8 @@ class TelegramCommandHandler:
             "/smoke - тестовое прод-уведомление"
         )
 
-    def _build_smoke_message(self) -> TelegramMessage:
-        event = WallEvent(
+    def _build_smoke_event(self) -> WallEvent:
+        return WallEvent(
             event="wall_confirmed",
             symbol="VSEH",
             side=Side.BUY,
@@ -244,17 +243,3 @@ class TelegramCommandHandler:
             dwell_seconds=3.4,
             qty_change_last_interval=120.0,
         )
-        text = format_event_message(event)
-        reply_markup = None
-        if self._include_instrument_button:
-            instrument_url = build_tinvest_url(
-                event.symbol,
-                None,
-                append_security_share_utm=self._append_security_share_utm,
-            )
-            if instrument_url:
-                reply_markup = build_inline_keyboard(
-                    instrument_url,
-                    self._instrument_button_text,
-                )
-        return TelegramMessage(text=text, reply_markup=reply_markup)

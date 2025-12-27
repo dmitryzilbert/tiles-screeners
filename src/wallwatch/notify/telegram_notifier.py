@@ -40,17 +40,22 @@ def build_tinvest_url(
     *,
     append_security_share_utm: bool = False,
 ) -> str | None:
-    if instrument is None:
+    if not symbol:
+        return None
+    url: str | None = None
+    if instrument is not None:
+        url = build_tinvest_url_parts(
+            instrument.instrument_type,
+            ticker=instrument.ticker,
+            isin=instrument.isin,
+            append_security_share_utm=append_security_share_utm,
+        )
+    if url is None:
         return build_tinvest_fallback_url(
             symbol,
             append_security_share_utm=append_security_share_utm,
         )
-    return build_tinvest_url_parts(
-        instrument.instrument_type,
-        ticker=instrument.ticker,
-        isin=instrument.isin,
-        append_security_share_utm=append_security_share_utm,
-    )
+    return url
 
 
 def build_tinvest_url_parts(
@@ -195,6 +200,9 @@ class TelegramNotifier:
         self._instrument_by_symbol = instrument_by_symbol
 
     def notify(self, event: WallEvent) -> None:
+        self.notify_event(event)
+
+    def notify_event(self, event: WallEvent) -> None:
         session_key = event.wall_key
         if event.event == "wall_confirmed":
             self._session_state[session_key] = "CONFIRMED"
@@ -212,12 +220,26 @@ class TelegramNotifier:
             return
         if not self._cooldown_allows(event):
             return
-        instrument = self._instrument_by_symbol.get(event.symbol)
-        instrument_url = build_tinvest_url(
-            event.symbol,
-            instrument,
-            append_security_share_utm=self._append_security_share_utm,
-        )
+        instrument_url = None
+        reason_if_null = None
+        if self._include_instrument_button:
+            instrument = self._instrument_by_symbol.get(event.symbol)
+            instrument_url = build_tinvest_url(
+                event.symbol,
+                instrument,
+                append_security_share_utm=self._append_security_share_utm,
+            )
+            if instrument_url is None:
+                reason_if_null = "symbol_missing"
+            self._logger.debug(
+                "telegram_button_prepared",
+                extra={
+                    "event_type": event.event,
+                    "symbol": event.symbol,
+                    "url": instrument_url,
+                    "reason_if_null": reason_if_null,
+                },
+            )
         text = format_event_message(event)
         payload: dict[str, Any] = {
             "text": text,

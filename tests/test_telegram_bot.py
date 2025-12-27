@@ -16,6 +16,7 @@ from wallwatch.app.commands import (
 from wallwatch.app.runtime_state import RuntimeState, RuntimeStateSnapshot, WallEventState
 from wallwatch.app.telegram_client import TelegramApiClient, UrllibTelegramHttpClient
 from wallwatch.app.telegram_polling import TelegramPolling
+from wallwatch.notify.telegram_notifier import TelegramNotifier
 
 
 class FakeManager:
@@ -117,6 +118,7 @@ def test_watch_updates_symbols() -> None:
         include_instrument_button=True,
         instrument_button_text="Открыть в Т-Инвестициях",
         append_security_share_utm=False,
+        emit_event=None,
         logger=logging.getLogger("test"),
         time_provider=time_provider,
     )
@@ -148,6 +150,7 @@ def test_start_and_help_responses() -> None:
         include_instrument_button=True,
         instrument_button_text="Открыть в Т-Инвестициях",
         append_security_share_utm=False,
+        emit_event=None,
         logger=logging.getLogger("test"),
         time_provider=datetime.now,
     )
@@ -252,6 +255,7 @@ def test_telegram_poll_timeout_is_debug(caplog) -> None:
 
 def test_smoke_command_sends_message_with_button() -> None:
     stop_event = asyncio.Event()
+    sent_payloads: list[dict[str, object]] = []
 
     class SmokeApi:
         def __init__(self) -> None:
@@ -296,20 +300,38 @@ def test_smoke_command_sends_message_with_button() -> None:
         depth=20,
     )
     manager = FakeManager(symbols=["SBER"])
-    handler = TelegramCommandHandler(
-        runtime_state=runtime_state,
-        manager=manager,
-        max_symbols=10,
-        allowed_user_ids={99},
-        include_instrument_button=True,
-        instrument_button_text="Открыть в Т-Инвестициях",
-        append_security_share_utm=False,
-        logger=logging.getLogger("test"),
-        time_provider=datetime.now,
-    )
     api = SmokeApi()
 
     async def _run() -> None:
+        async def _send(url: str, payload: dict[str, object]) -> None:
+            sent_payloads.append(payload)
+
+        notifier = TelegramNotifier(
+            token="token",
+            chat_ids=[123],
+            parse_mode="HTML",
+            disable_web_preview=True,
+            send_events=["wall_confirmed"],
+            cooldown_seconds={"wall_confirmed": 0.0},
+            instrument_by_symbol={},
+            include_instrument_button=True,
+            instrument_button_text="Открыть в Т-Инвестициях",
+            append_security_share_utm=False,
+            logger=logging.getLogger("test"),
+            send_func=_send,
+        )
+        handler = TelegramCommandHandler(
+            runtime_state=runtime_state,
+            manager=manager,
+            max_symbols=10,
+            allowed_user_ids={99},
+            include_instrument_button=True,
+            instrument_button_text="Открыть в Т-Инвестициях",
+            append_security_share_utm=False,
+            emit_event=notifier.notify_event,
+            logger=logging.getLogger("test"),
+            time_provider=datetime.now,
+        )
         polling = TelegramPolling(
             api=api,
             command_handler=handler,
@@ -319,11 +341,14 @@ def test_smoke_command_sends_message_with_button() -> None:
             poll_interval_seconds=0,
         )
         await polling.run(stop_event)
+        await notifier.flush()
+        await notifier.aclose()
 
     asyncio.run(_run())
 
-    assert len(api.sent) == 1
-    sent = api.sent[0]
+    assert len(api.sent) == 0
+    assert len(sent_payloads) == 1
+    sent = json.loads(json.dumps(sent_payloads[0]))
     assert sent["chat_id"] == 123
     assert sent["parse_mode"] == "HTML"
     reply_markup = sent["reply_markup"]
