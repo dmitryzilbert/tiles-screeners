@@ -14,6 +14,7 @@ from wallwatch.app.commands import (
 )
 from wallwatch.app.runtime_state import RuntimeState, RuntimeStateSnapshot, WallEventState
 from wallwatch.app.telegram_client import TelegramApiClient, UrllibTelegramHttpClient
+from wallwatch.app.telegram_polling import TelegramPolling
 
 
 class FakeManager:
@@ -195,3 +196,39 @@ def test_telegram_http_client_sends_json(monkeypatch) -> None:
     assert seen["headers"]["content-type"] == "application/json; charset=utf-8"
     assert isinstance(seen["data"], bytes)
     assert json.loads(seen["data"].decode("utf-8")) == payload
+
+
+def test_telegram_poll_timeout_is_debug(caplog) -> None:
+    class TimeoutApi:
+        def __init__(self, stop_event: asyncio.Event) -> None:
+            self._stop_event = stop_event
+
+        async def get_updates(self, offset: int | None, timeout: int) -> list[dict[str, object]]:
+            self._stop_event.set()
+            raise TimeoutError()
+
+        async def send_message(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            raise AssertionError("send_message should not be called")
+
+    class DummyHandler:
+        async def handle_command(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            return None
+
+    async def _run() -> list[logging.LogRecord]:
+        stop_event = asyncio.Event()
+        api = TimeoutApi(stop_event)
+        polling = TelegramPolling(
+            api=api,
+            command_handler=DummyHandler(),
+            logger=logging.getLogger("telegram_polling_test"),
+            parse_mode=None,
+            disable_web_preview=True,
+            poll_interval_seconds=0,
+        )
+        caplog.set_level(logging.DEBUG, logger="telegram_polling_test")
+        await polling.run(stop_event)
+        return list(caplog.records)
+
+    records = asyncio.run(_run())
+    assert any(record.message == "telegram_poll_timeout" for record in records)
+    assert not any(record.message == "telegram_poll_failed" for record in records)

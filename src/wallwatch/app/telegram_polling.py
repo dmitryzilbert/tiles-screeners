@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 from typing import Iterable
 
 from wallwatch.app.commands import TelegramCommandHandler
@@ -34,15 +35,22 @@ class TelegramPolling:
 
     async def run(self, stop_event: asyncio.Event) -> None:
         self._logger.info("telegram_polling_started")
+        backoff_seconds = 1.0
         while not stop_event.is_set():
             try:
                 updates = await self._api.get_updates(self._offset, timeout=30)
             except asyncio.CancelledError:
                 return
-            except Exception as exc:  # noqa: BLE001
-                self._logger.warning("telegram_poll_failed", extra={"error": str(exc)})
-                await asyncio.sleep(self._poll_interval_seconds)
+            except (TimeoutError, socket.timeout):
+                self._logger.debug("telegram_poll_timeout")
+                backoff_seconds = 1.0
                 continue
+            except Exception as exc:  # noqa: BLE001
+                self._log_poll_error(exc)
+                await asyncio.sleep(backoff_seconds)
+                backoff_seconds = min(backoff_seconds * 2, 30.0)
+                continue
+            backoff_seconds = 1.0
 
             for update in updates:
                 update_id = update.get("update_id")
@@ -93,3 +101,13 @@ class TelegramPolling:
             if description:
                 extra["telegram_description"] = description
             self._logger.warning("telegram_send_failed", extra=extra)
+
+    def _log_poll_error(self, exc: Exception) -> None:
+        if isinstance(exc, TelegramApiError) and exc.status_code is not None:
+            extra = {"error": str(exc), "status_code": exc.status_code}
+            if exc.status_code >= 500:
+                self._logger.error("telegram_poll_failed", extra=extra)
+                return
+            self._logger.warning("telegram_poll_failed", extra=extra)
+            return
+        self._logger.warning("telegram_poll_failed", extra={"error": str(exc)})
