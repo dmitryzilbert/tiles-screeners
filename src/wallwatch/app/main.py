@@ -414,6 +414,9 @@ async def run_monitor_async(argv: list[str]) -> None:
                 manager=manager,
                 max_symbols=detector_config.max_symbols,
                 allowed_user_ids=settings.tg_allowed_user_ids,
+                include_instrument_button=config.telegram.include_instrument_button,
+                instrument_button_text=config.telegram.button_text,
+                append_security_share_utm=config.telegram.append_security_share_utm,
                 logger=logger,
                 time_provider=datetime.now,
             )

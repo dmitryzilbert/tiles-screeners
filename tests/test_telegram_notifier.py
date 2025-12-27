@@ -80,6 +80,7 @@ def test_build_tinvest_url_parts() -> None:
 def test_build_tinvest_url() -> None:
     assert (
         build_tinvest_url(
+            "SBER",
             InstrumentInfo(
                 instrument_id="uid-1",
                 symbol="SBER",
@@ -92,6 +93,7 @@ def test_build_tinvest_url() -> None:
     )
     assert (
         build_tinvest_url(
+            "FXRL",
             InstrumentInfo(
                 instrument_id="uid-2",
                 symbol="FXRL",
@@ -104,6 +106,7 @@ def test_build_tinvest_url() -> None:
     )
     assert (
         build_tinvest_url(
+            "RU000A107U81",
             InstrumentInfo(
                 instrument_id="uid-3",
                 symbol="RU000A107U81",
@@ -116,6 +119,7 @@ def test_build_tinvest_url() -> None:
     )
     assert (
         build_tinvest_url(
+            "USDRUB",
             InstrumentInfo(
                 instrument_id="uid-4",
                 symbol="USDRUB",
@@ -128,6 +132,7 @@ def test_build_tinvest_url() -> None:
     )
     assert (
         build_tinvest_url(
+            "USDRUBF",
             InstrumentInfo(
                 instrument_id="uid-5",
                 symbol="USDRUBF",
@@ -137,6 +142,16 @@ def test_build_tinvest_url() -> None:
             )
         )
         == "https://www.tbank.ru/invest/futures/USDRUBF/"
+    )
+
+
+def test_build_tinvest_url_fallback() -> None:
+    assert (
+        build_tinvest_url("VSEH", None) == "https://www.tbank.ru/invest/stocks/VSEH/"
+    )
+    assert (
+        build_tinvest_url("RU0009029540", None)
+        == "https://www.tbank.ru/invest/bonds/RU0009029540/"
     )
 
 
@@ -200,13 +215,6 @@ def test_send_message_payload() -> None:
         requests.append((url, payload))
 
     async def _run() -> None:
-        instrument = InstrumentInfo(
-            instrument_id="uid-123",
-            symbol="SBER",
-            tick_size=0.01,
-            instrument_type=schemas.InstrumentType.INSTRUMENT_TYPE_SHARE,
-            ticker="SBER",
-        )
         notifier = TelegramNotifier(
             token="token",
             chat_ids=[123],
@@ -214,7 +222,7 @@ def test_send_message_payload() -> None:
             disable_web_preview=True,
             send_events=["wall_confirmed"],
             cooldown_seconds={"wall_confirmed": 0.0},
-            instrument_by_symbol={"SBER": instrument},
+            instrument_by_symbol={},
             include_instrument_button=True,
             instrument_button_text="Открыть в Т-Инвестициях",
             append_security_share_utm=False,

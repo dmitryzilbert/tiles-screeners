@@ -5,7 +5,7 @@ import logging
 import socket
 from typing import Iterable
 
-from wallwatch.app.commands import TelegramCommandHandler
+from wallwatch.app.commands import CommandResponse, TelegramCommandHandler
 from wallwatch.app.telegram_client import TelegramApiClient, TelegramApiError
 
 
@@ -78,22 +78,31 @@ class TelegramPolling:
                     text, chat_id=chat_id, user_id=user_id
                 )
                 if response:
-                    await self._send_response(chat_id, response)
+                    await self._send_command_response(chat_id, response)
 
             if not updates:
                 await asyncio.sleep(self._poll_interval_seconds)
 
     async def send_startup_message(self, chat_ids: Iterable[int], text: str) -> None:
         for chat_id in chat_ids:
-            await self._send_response(chat_id, text)
+            await self._send_response(chat_id, text, reply_markup=None)
 
-    async def _send_response(self, chat_id: int, text: str) -> None:
+    async def _send_command_response(self, chat_id: int, response: CommandResponse) -> None:
+        if response.text:
+            await self._send_response(chat_id, response.text, reply_markup=None)
+        for message in response.messages:
+            await self._send_response(chat_id, message.text, reply_markup=message.reply_markup)
+
+    async def _send_response(
+        self, chat_id: int, text: str, *, reply_markup: dict[str, object] | None
+    ) -> None:
         try:
             await self._api.send_message(
                 chat_id=chat_id,
                 text=text,
                 parse_mode=self._parse_mode,
                 disable_web_preview=self._disable_web_preview,
+                reply_markup=reply_markup,
             )
         except Exception as exc:  # noqa: BLE001
             description = exc.description if isinstance(exc, TelegramApiError) else None

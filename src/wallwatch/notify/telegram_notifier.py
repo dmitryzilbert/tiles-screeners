@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import html
+import json
 import logging
+import re
 import time
 from typing import Any, Awaitable, Callable, Iterable
 from urllib import error as urllib_error
@@ -26,6 +27,7 @@ _EVENT_TITLES = {
 
 _TINVEST_BASE_URL = "https://www.tbank.ru"
 _SECURITY_SHARE_UTM = "utm_source=security_share"
+_ISIN_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{10}$")
 
 
 def build_inline_keyboard(url: str, button_text: str) -> dict[str, Any]:
@@ -33,12 +35,16 @@ def build_inline_keyboard(url: str, button_text: str) -> dict[str, Any]:
 
 
 def build_tinvest_url(
+    symbol: str,
     instrument: InstrumentInfo | None,
     *,
     append_security_share_utm: bool = False,
 ) -> str | None:
     if instrument is None:
-        return None
+        return build_tinvest_fallback_url(
+            symbol,
+            append_security_share_utm=append_security_share_utm,
+        )
     return build_tinvest_url_parts(
         instrument.instrument_type,
         ticker=instrument.ticker,
@@ -71,11 +77,39 @@ def build_tinvest_url_parts(
     elif instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_FUTURES:
         identifier = ticker
         path = "/invest/futures/{identifier}/"
-    elif instrument_type == schemas.InstrumentType.INSTRUMENT_TYPE_INDEX:
-        identifier = ticker
-        path = "/invest/indexes/{identifier}/"
     if not identifier or not path:
         return None
+    return _build_tinvest_url(
+        identifier,
+        path,
+        append_security_share_utm=append_security_share_utm,
+    )
+
+
+def build_tinvest_fallback_url(
+    symbol: str, *, append_security_share_utm: bool = False
+) -> str:
+    if _looks_like_isin(symbol):
+        path = "/invest/bonds/{identifier}/"
+    else:
+        path = "/invest/stocks/{identifier}/"
+    return _build_tinvest_url(symbol, path, append_security_share_utm=append_security_share_utm)
+
+
+def _looks_like_isin(symbol: str) -> bool:
+    if _ISIN_RE.match(symbol):
+        return True
+    if symbol.startswith("RU") and len(symbol) == 12:
+        return True
+    return False
+
+
+def _build_tinvest_url(
+    identifier: str,
+    path: str,
+    *,
+    append_security_share_utm: bool = False,
+) -> str:
     encoded = quote(identifier, safe="")
     url = f"{_TINVEST_BASE_URL}{path.format(identifier=encoded)}"
     if append_security_share_utm:
@@ -180,6 +214,7 @@ class TelegramNotifier:
             return
         instrument = self._instrument_by_symbol.get(event.symbol)
         instrument_url = build_tinvest_url(
+            event.symbol,
             instrument,
             append_security_share_utm=self._append_security_share_utm,
         )
