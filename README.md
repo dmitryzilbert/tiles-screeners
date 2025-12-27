@@ -61,6 +61,7 @@ tinvest_token="..."
 - `wallwatch_retry_backoff_max_seconds` (НЕОБЯЗАТЕЛЬНО, по умолчанию `30.0`): максимальный backoff для повторных подключений.
 - `wallwatch_stream_idle_sleep_seconds` (НЕОБЯЗАТЕЛЬНО, по умолчанию `3600.0`): idle sleep между keep-alive.
 - `wallwatch_instrument_status` (НЕОБЯЗАТЕЛЬНО, по умолчанию `BASE`): статус инструментов для поиска (`BASE` или `ALL`).
+- `tinvest_grpc_endpoint` (НЕОБЯЗАТЕЛЬНО, по умолчанию `invest-public-api.tbank.ru:443`): gRPC endpoint для T-Invest.
 - `tg_bot_token` (ОБЯЗАТЕЛЬНО для Telegram-режима): токен Telegram-бота.
 - `tg_chat_id` (ОБЯЗАТЕЛЬНО для Telegram-режима): chat id для алертов (через запятую для нескольких).
 - `tg_allowed_user_ids` (НЕОБЯЗАТЕЛЬНО): список user id, которым разрешены команды (через запятую).
@@ -69,6 +70,7 @@ tinvest_token="..."
 - `warn_deprecated_env` (НЕОБЯЗАТЕЛЬНО, по умолчанию `false`): одноразовое предупреждение, если используются ключи в верхнем регистре.
 
 > Важно: ключи в `.env` должны быть в нижнем регистре, как указано выше.
+> Старые домены `*.tinkoff.ru` устарели, используйте `*.tbank.ru`.
 
 ## Конфигурация
 

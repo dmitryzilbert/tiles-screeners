@@ -33,6 +33,7 @@ class EnvSettings:
     retry_backoff_initial_seconds: float
     retry_backoff_max_seconds: float
     stream_idle_sleep_seconds: float
+    grpc_endpoint: str | None
     tg_bot_token: str | None
     tg_chat_ids: list[int]
     tg_allowed_user_ids: set[int]
@@ -121,6 +122,8 @@ class AppConfig:
 
 
 GRPC_ROOTS_ENV_VAR = "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"
+DEFAULT_GRPC_ENDPOINT = "invest-public-api.tbank.ru:443"
+DEPRECATED_ENDPOINT_DOMAIN = "tinkoff.ru"
 _DEPRECATED_UPPERCASE_WARNED = False
 _TELEGRAM_EVENTS = {
     "wall_candidate",
@@ -165,6 +168,11 @@ def load_env_settings(warn_deprecated_env: bool | None = None) -> EnvSettings:
         3600.0,
         warn_deprecated_env=warn_deprecated_env,
     )
+    grpc_endpoint = _get_env_value(
+        "tinvest_grpc_endpoint",
+        legacy_names=["invest_grpc_endpoint"],
+        warn_deprecated_env=warn_deprecated_env,
+    )
     instrument_status = _parse_instrument_status_env(
         "wallwatch_instrument_status",
         schemas.InstrumentStatus.INSTRUMENT_STATUS_BASE,
@@ -194,6 +202,7 @@ def load_env_settings(warn_deprecated_env: bool | None = None) -> EnvSettings:
         retry_backoff_initial_seconds=retry_backoff_initial_seconds,
         retry_backoff_max_seconds=retry_backoff_max_seconds,
         stream_idle_sleep_seconds=stream_idle_sleep_seconds,
+        grpc_endpoint=grpc_endpoint,
         instrument_status=instrument_status,
         tg_bot_token=tg_bot_token,
         tg_chat_ids=tg_chat_ids,
@@ -201,6 +210,19 @@ def load_env_settings(warn_deprecated_env: bool | None = None) -> EnvSettings:
         tg_polling=tg_polling,
         tg_parse_mode=tg_parse_mode,
     )
+
+
+def resolve_grpc_endpoint(settings: EnvSettings, logger: logging.Logger) -> str:
+    endpoint = settings.grpc_endpoint or DEFAULT_GRPC_ENDPOINT
+    if DEPRECATED_ENDPOINT_DOMAIN in endpoint:
+        logger.warning(
+            "deprecated_endpoint_domain",
+            extra={
+                "endpoint": endpoint,
+                "suggested": DEFAULT_GRPC_ENDPOINT,
+            },
+        )
+    return endpoint
 
 
 def configure_grpc_root_certificates(settings: EnvSettings, logger: logging.Logger) -> str | None:

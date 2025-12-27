@@ -26,6 +26,7 @@ def _settings(**overrides: object) -> EnvSettings:
         "retry_backoff_initial_seconds": 1.0,
         "retry_backoff_max_seconds": 30.0,
         "stream_idle_sleep_seconds": 3600.0,
+        "grpc_endpoint": None,
         "tg_bot_token": None,
         "tg_chat_ids": [],
         "tg_allowed_user_ids": set(),

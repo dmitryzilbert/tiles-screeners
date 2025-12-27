@@ -14,15 +14,17 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import find_dotenv, load_dotenv
-from wallwatch.api.client import InstrumentInfo, MarketDataClient, _resolve_grpc_endpoint
+from wallwatch.api.client import InstrumentInfo, MarketDataClient
 from wallwatch.app.config import (
     CABundleError,
     ConfigError,
     configure_grpc_root_certificates,
     ensure_required_env,
+    DEFAULT_GRPC_ENDPOINT,
     load_app_config,
     load_env_settings,
     missing_required_env,
+    resolve_grpc_endpoint,
     resolve_depth,
     resolve_log_level,
 )
@@ -223,12 +225,14 @@ async def run_monitor_async(argv: list[str]) -> None:
         logger.error("config_error", extra={"error": str(exc)})
         sys.exit(1)
 
+    grpc_endpoint = resolve_grpc_endpoint(settings, logger)
     logger.info(
         "effective_config",
         extra={
             "config_path": str(args.config) if args.config else None,
             "logging.level": log_level,
             "marketdata.depth": detector_config.depth,
+            "grpc.endpoint": grpc_endpoint,
             "debug.walls_enabled": debug_enabled,
             "debug.walls_interval_seconds": debug_interval,
             "walls.top_n_levels": config.walls.top_n_levels,
@@ -260,6 +264,7 @@ async def run_monitor_async(argv: list[str]) -> None:
         root_certificates=None,
         stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
         instrument_status=settings.instrument_status,
+        endpoint=grpc_endpoint,
     )
     telegram_notifier: TelegramNotifier | None = None
 
@@ -304,7 +309,7 @@ async def run_monitor_async(argv: list[str]) -> None:
             "pid": os.getpid(),
             "symbols": symbols,
             "depth": detector_config.depth,
-            "endpoint": _resolve_grpc_endpoint(),
+            "endpoint": grpc_endpoint,
         },
     )
     resolved: list[InstrumentInfo] = []
@@ -555,6 +560,11 @@ async def build_doctor_report(
         else:
             report.append(("env", True, "Required environment variables set"))
 
+    grpc_endpoint = DEFAULT_GRPC_ENDPOINT
+    if settings is not None:
+        grpc_endpoint = resolve_grpc_endpoint(settings, logger)
+    report.append(("grpc_endpoint", True, f"Endpoint: {grpc_endpoint}"))
+
     try:
         _ = load_app_config(config_path)
         report.append(("config", True, "Config loaded"))
@@ -588,6 +598,7 @@ async def build_doctor_report(
             root_certificates=None,
             stream_idle_sleep_seconds=settings.stream_idle_sleep_seconds,
             instrument_status=settings.instrument_status,
+            endpoint=grpc_endpoint,
         )
         try:
             resolved, failures = await client.resolve_instruments(grpc_symbols)

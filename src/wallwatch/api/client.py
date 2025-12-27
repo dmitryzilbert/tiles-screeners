@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable, Iterable, Optional
 
 import grpc
-import t_tech.invest as tinvest
 from t_tech.invest import AsyncClient, MarketDataRequest, SubscriptionAction
 from t_tech.invest import schemas
 from t_tech.invest.services import InstrumentsService
@@ -95,12 +94,14 @@ class MarketDataClient:
         root_certificates: bytes | None = None,
         stream_idle_sleep_seconds: float = 3600.0,
         instrument_status: schemas.InstrumentStatus | None = schemas.InstrumentStatus.INSTRUMENT_STATUS_BASE,
+        endpoint: str | None = None,
     ) -> None:
         self._token = token
         self._logger = logger
         self._root_certificates = root_certificates
         self._stream_idle_sleep_seconds = stream_idle_sleep_seconds
         self._instrument_status = instrument_status
+        self._endpoint = endpoint
 
     async def resolve_instruments(self, symbols: Iterable[str]) -> tuple[list[InstrumentInfo], list[str]]:
         resolved: list[InstrumentInfo] = []
@@ -403,19 +404,7 @@ class MarketDataClient:
             await channel.close()
 
     def _client_kwargs(self) -> tuple[dict[str, object], grpc.aio.Channel | None]:
-        return {}, None
-
-
-def _resolve_grpc_endpoint() -> str | None:
-    for name in (
-        "API_URL",
-        "API_ENDPOINT",
-        "DEFAULT_API_URL",
-        "DEFAULT_ENDPOINT",
-        "DEFAULT_HOST",
-        "DEFAULT_GRPC_ENDPOINT",
-    ):
-        value = getattr(tinvest, name, None)
-        if isinstance(value, str) and value:
-            return value
-    return None
+        kwargs: dict[str, object] = {}
+        if self._endpoint:
+            kwargs["target"] = self._endpoint
+        return kwargs, None
