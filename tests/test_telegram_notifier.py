@@ -237,3 +237,59 @@ def test_send_message_payload() -> None:
     assert isinstance(inline_keyboard, list)
     assert all(isinstance(row, list) for row in inline_keyboard)
     assert inline_keyboard[0][0]["url"].endswith("/SBER/")
+
+
+def test_lost_sent_once_per_confirm() -> None:
+    notifier = TelegramNotifier(
+        token="token",
+        chat_ids=[1],
+        parse_mode="HTML",
+        disable_web_preview=True,
+        send_events=["wall_confirmed", "wall_lost"],
+        cooldown_seconds={},
+        instrument_by_symbol={},
+        include_instrument_button=False,
+        instrument_button_text="",
+        append_security_share_utm=False,
+        logger=logging.getLogger("test"),
+        start_worker=False,
+        send_func=lambda *_: asyncio.sleep(0),
+    )
+
+    notifier.notify(_event(event="wall_confirmed"))
+    notifier.notify(_event(event="wall_lost"))
+    notifier.notify(_event(event="wall_lost"))
+    assert notifier._queue.qsize() == 2
+
+    notifier.notify(_event(event="wall_confirmed"))
+    notifier.notify(_event(event="wall_lost"))
+    assert notifier._queue.qsize() == 4
+
+    asyncio.run(notifier.aclose())
+
+
+def test_consuming_requires_confirm() -> None:
+    notifier = TelegramNotifier(
+        token="token",
+        chat_ids=[1],
+        parse_mode="HTML",
+        disable_web_preview=True,
+        send_events=["wall_confirmed", "wall_consuming"],
+        cooldown_seconds={},
+        instrument_by_symbol={},
+        include_instrument_button=False,
+        instrument_button_text="",
+        append_security_share_utm=False,
+        logger=logging.getLogger("test"),
+        start_worker=False,
+        send_func=lambda *_: asyncio.sleep(0),
+    )
+
+    notifier.notify(_event(event="wall_consuming"))
+    assert notifier._queue.qsize() == 0
+
+    notifier.notify(_event(event="wall_confirmed"))
+    notifier.notify(_event(event="wall_consuming"))
+    assert notifier._queue.qsize() == 2
+
+    asyncio.run(notifier.aclose())

@@ -155,11 +155,25 @@ class TelegramNotifier:
         self._send_func = send_func or self._send_via_http
         self._task = asyncio.create_task(self._worker()) if start_worker else None
         self._last_sent: dict[tuple[str, str], float] = {}
+        self._session_state: dict[tuple[str, str], str] = {}
 
     def update_instruments(self, instrument_by_symbol: dict[str, InstrumentInfo]) -> None:
         self._instrument_by_symbol = instrument_by_symbol
 
     def notify(self, event: WallEvent) -> None:
+        session_key = (event.symbol, event.wall_key)
+        if event.event == "wall_confirmed":
+            self._session_state[session_key] = "CONFIRMED"
+        elif event.event == "wall_lost":
+            if self._session_state.get(session_key) != "CONFIRMED":
+                self._logger.debug("lost_suppressed_no_confirm", extra=event.to_log_extra())
+                return
+        elif event.event == "wall_consuming":
+            if self._session_state.get(session_key) != "CONFIRMED":
+                self._logger.debug(
+                    "consuming_suppressed_no_confirm", extra=event.to_log_extra()
+                )
+                return
         if event.event not in self._send_events:
             return
         if not self._cooldown_allows(event):
@@ -181,6 +195,8 @@ class TelegramNotifier:
                 self._instrument_button_text,
             )
         self._enqueue(payload)
+        if event.event == "wall_lost":
+            self._session_state[session_key] = "LOST"
 
     def close(self) -> None:
         if self._task is not None:
