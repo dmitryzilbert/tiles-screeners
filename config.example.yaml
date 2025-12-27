@@ -1,6 +1,9 @@
 logging:
   level: INFO
 
+grpc:
+  ca_bundle_path: null
+
 marketdata:
   depth: 20
 

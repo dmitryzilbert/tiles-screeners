@@ -118,6 +118,20 @@ marketdata:
     assert log_level == 20
 
 
+def test_load_app_config_grpc_section(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+grpc:
+  ca_bundle_path: /etc/ssl/custom.pem
+""".lstrip()
+    )
+
+    config = load_app_config(config_path)
+
+    assert config.grpc.ca_bundle_path == "/etc/ssl/custom.pem"
+
+
 def test_walls_config_from_yaml_overrides_defaults(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(

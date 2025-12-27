@@ -55,7 +55,7 @@ tinvest_token="..."
 - `tinvest_token` (ОБЯЗАТЕЛЬНО): gRPC токен для T-Invest.
 - `invest_token` (НЕОБЯЗАТЕЛЬНО): устаревшее имя токена (используйте только если `tinvest_token` не задан).
 - `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` (НЕОБЯЗАТЕЛЬНО, рекомендуется для деплоя): путь к PEM-encoded CA bundle для gRPC TLS.
-- `tinvest_ca_bundle_path` (НЕОБЯЗАТЕЛЬНО): путь к PEM-encoded CA bundle для gRPC TLS.
+- `tinvest_ca_bundle_path` (НЕОБЯЗАТЕЛЬНО): путь к PEM-encoded CA bundle для gRPC TLS (перекрывает `grpc.ca_bundle_path` из конфига).
 - `tinvest_ca_bundle_b64` (НЕОБЯЗАТЕЛЬНО): base64-encoded PEM bundle для gRPC TLS.
 - `wallwatch_retry_backoff_initial_seconds` (НЕОБЯЗАТЕЛЬНО, по умолчанию `1.0`): начальный backoff для повторных подключений.
 - `wallwatch_retry_backoff_max_seconds` (НЕОБЯЗАТЕЛЬНО, по умолчанию `30.0`): максимальный backoff для повторных подключений.
@@ -81,6 +81,9 @@ tinvest_token="..."
 ```yaml
 logging:
   level: INFO
+
+grpc:
+  ca_bundle_path: ca/russian_trusted_bundle.pem
 
 marketdata:
   depth: 20
@@ -115,6 +118,21 @@ telegram:
     wall_lost: 0
   disable_web_preview: true
   commands_enabled: true
+```
+
+### CA bundle для РФ
+
+Сложите PEM bundle (например, НУЦ Минцифры) в `ca/russian_trusted_bundle.pem` и укажите путь в конфиге:
+
+```yaml
+grpc:
+  ca_bundle_path: ca/russian_trusted_bundle.pem
+```
+
+Или в `.env` (перекрывает конфиг):
+
+```dotenv
+tinvest_ca_bundle_path="ca/russian_trusted_bundle.pem"
 ```
 
 ### Приоритет настроек
@@ -251,7 +269,7 @@ curl -X POST "https://api.telegram.org/bot<YOUR_TOKEN>/sendMessage" \
 
 ## Troubleshooting
 
-- **Проблемы с CA bundle / TLS**: установите системные сертификаты или задайте `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`, `tinvest_ca_bundle_path`, `tinvest_ca_bundle_b64`.
+- **Проблемы с CA bundle / TLS**: установите системные сертификаты или задайте `grpc.ca_bundle_path`, `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`, `tinvest_ca_bundle_path`, `tinvest_ca_bundle_b64`.
 - **Windows: Ctrl+C не завершает процесс**: запустите в новой консоли PowerShell и используйте `Stop-Process -Id <PID>` либо закрывайте окно терминала.
 - **"wallwatch из глобального python"**: убедитесь, что активировано `venv` и используется `pip install -e .` именно внутри окружения.
 - **`rx=0` когда биржа закрыта**: это ожидаемо — поток ордербуков может быть пустым вне торговых сессий.
