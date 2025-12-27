@@ -91,6 +91,9 @@ class TelegramConfig:
     )
     disable_web_preview: bool = True
     commands_enabled: bool = True
+    include_instrument_button: bool = True
+    button_text: str = "Открыть в Т-Инвестициях"
+    append_security_share_utm: bool = False
 
 
 @dataclass(frozen=True)
@@ -709,6 +712,22 @@ def _parse_telegram_config(raw: dict[str, Any]) -> TelegramConfig:
         _value_or_default(raw, "commands_enabled", base.commands_enabled),
         "telegram.commands_enabled",
     )
+    include_instrument_button = _parse_bool_value_yaml(
+        _value_or_default(
+            raw,
+            "include_instrument_button",
+            base.include_instrument_button,
+        ),
+        "telegram.include_instrument_button",
+    )
+    button_text = _parse_str_value(
+        _value_or_default(raw, "button_text", base.button_text),
+        "telegram.button_text",
+    )
+    append_security_share_utm = _parse_bool_value_yaml(
+        _value_or_default(raw, "append_security_share_utm", base.append_security_share_utm),
+        "telegram.append_security_share_utm",
+    )
     return TelegramConfig(
         enabled=enabled,
         polling=polling,
@@ -718,6 +737,9 @@ def _parse_telegram_config(raw: dict[str, Any]) -> TelegramConfig:
         cooldown_seconds=cooldown_seconds,
         disable_web_preview=disable_web_preview,
         commands_enabled=commands_enabled,
+        include_instrument_button=include_instrument_button,
+        button_text=button_text,
+        append_security_share_utm=append_security_share_utm,
     )
 
 
@@ -820,6 +842,9 @@ def _collect_unknown_keys(raw: dict[str, Any]) -> list[str]:
             "cooldown_seconds",
             "disable_web_preview",
             "commands_enabled",
+            "include_instrument_button",
+            "button_text",
+            "append_security_share_utm",
         },
     }
     for section, allowed_keys in section_allowed.items():
@@ -859,6 +884,12 @@ def _parse_int_value(value: Any, name: str) -> int:
         except ValueError as exc:
             raise ConfigError(f"{name} must be an integer") from exc
     raise ConfigError(f"{name} must be an integer")
+
+
+def _parse_str_value(value: Any, name: str) -> str:
+    if isinstance(value, str):
+        return value
+    raise ConfigError(f"{name} must be a string")
 
 
 def _parse_float_value(value: Any, name: str) -> float:

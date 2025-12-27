@@ -34,3 +34,6 @@ telegram:
     wall_lost: 0
   disable_web_preview: true
   commands_enabled: true
+  include_instrument_button: true
+  button_text: "Открыть в Т-Инвестициях"
+  append_security_share_utm: false

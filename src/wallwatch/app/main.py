@@ -251,6 +251,9 @@ async def run_monitor_async(argv: list[str]) -> None:
             "telegram.cooldown_seconds": config.telegram.cooldown_seconds,
             "telegram.disable_web_preview": config.telegram.disable_web_preview,
             "telegram.commands_enabled": config.telegram.commands_enabled,
+            "telegram.include_instrument_button": config.telegram.include_instrument_button,
+            "telegram.button_text": config.telegram.button_text,
+            "telegram.append_security_share_utm": config.telegram.append_security_share_utm,
             "dump.book_enabled": args.dump_book,
             "dump.book_interval_seconds": args.dump_book_interval,
             "dump.book_levels": args.dump_book_levels,
@@ -277,6 +280,9 @@ async def run_monitor_async(argv: list[str]) -> None:
             send_events=config.telegram.send_events,
             cooldown_seconds=config.telegram.cooldown_seconds,
             instrument_by_symbol={},
+            include_instrument_button=config.telegram.include_instrument_button,
+            instrument_button_text=config.telegram.button_text,
+            append_security_share_utm=config.telegram.append_security_share_utm,
             logger=logger,
         )
 
