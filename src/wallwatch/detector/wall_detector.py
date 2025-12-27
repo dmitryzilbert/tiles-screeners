@@ -116,7 +116,7 @@ class WallDetector:
                 )
                 if (
                     state.last_event_state != "NONE"
-                    and state.last_event_wall_key == self._wall_key(wall)
+                    and state.last_event_wall_key == self._wall_key(state, wall)
                 ):
                     events.append(
                         self._build_wall_event(
@@ -162,7 +162,7 @@ class WallDetector:
                 )
                 if (
                     state.last_event_state != "NONE"
-                    and state.last_event_wall_key == self._wall_key(previous_wall)
+                    and state.last_event_wall_key == self._wall_key(state, previous_wall)
                 ):
                     events.append(
                         self._build_wall_event(
@@ -199,7 +199,7 @@ class WallDetector:
             distance_ok,
             topn_ok,
         ) = self._evaluate_event_state(snapshot, candidate, wall, dwell_seconds)
-        wall_key = self._wall_key(wall)
+        wall_key = self._wall_key(state, wall)
         if event_state == "NONE":
             if (
                 state.last_event_state != "NONE"
@@ -451,7 +451,7 @@ class WallDetector:
         snapshot: OrderBookSnapshot,
         reason: str | None = None,
     ) -> WallEvent:
-        wall_key = self._wall_key(wall)
+        wall_key = self._wall_key(state, wall)
         return WallEvent(
             event=event,
             symbol=state.symbol,
@@ -600,8 +600,9 @@ class WallDetector:
             "consume_drop_pct": self._config.consuming_drop_pct,
         }
 
-    def _wall_key(self, wall: ActiveWall) -> str:
-        return f"{wall.side.value}@{wall.price}"
+    def _wall_key(self, state: InstrumentState, wall: ActiveWall) -> str:
+        instrument_key = state.instrument_id or state.symbol
+        return f"{instrument_key}|{wall.side.value}|{wall.price}"
 
     def _distance_ticks_to_spread(
         self,
