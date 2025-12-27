@@ -23,7 +23,7 @@ def _event(**overrides: object) -> WallEvent:
         "side": Side.BUY,
         "price": 120.5,
         "qty": 1000.0,
-        "wall_key": "SBER|BUY|120.5",
+        "wall_key": "uid-sber|BUY|120.5",
         "distance_ticks_to_spread": 1,
         "distance_ticks": 2,
         "ratio_to_median": 12.3,
@@ -264,6 +264,155 @@ def test_lost_sent_once_per_confirm() -> None:
     notifier.notify(_event(event="wall_confirmed"))
     notifier.notify(_event(event="wall_lost"))
     assert notifier._queue.qsize() == 4
+
+    asyncio.run(notifier.aclose())
+
+
+def test_lost_dedup_is_per_instrument() -> None:
+    notifier = TelegramNotifier(
+        token="token",
+        chat_ids=[1],
+        parse_mode="HTML",
+        disable_web_preview=True,
+        send_events=["wall_lost"],
+        cooldown_seconds={},
+        instrument_by_symbol={},
+        include_instrument_button=False,
+        instrument_button_text="",
+        append_security_share_utm=False,
+        logger=logging.getLogger("test"),
+        start_worker=False,
+        send_func=lambda *_: asyncio.sleep(0),
+    )
+
+    notifier.notify(
+        _event(
+            event="wall_confirmed",
+            symbol="SBER",
+            wall_key="uid-sber|BUY|120.5",
+            price=120.5,
+        )
+    )
+    notifier.notify(
+        _event(
+            event="wall_lost",
+            symbol="SBER",
+            wall_key="uid-sber|BUY|120.5",
+            price=120.5,
+        )
+    )
+    notifier.notify(
+        _event(
+            event="wall_confirmed",
+            symbol="GAZP",
+            wall_key="uid-gazp|SELL|210.0",
+            side=Side.SELL,
+            price=210.0,
+        )
+    )
+    notifier.notify(
+        _event(
+            event="wall_lost",
+            symbol="GAZP",
+            wall_key="uid-gazp|SELL|210.0",
+            side=Side.SELL,
+            price=210.0,
+        )
+    )
+    assert notifier._queue.qsize() == 2
+
+    asyncio.run(notifier.aclose())
+
+
+def test_lost_dedup_is_per_wall() -> None:
+    notifier = TelegramNotifier(
+        token="token",
+        chat_ids=[1],
+        parse_mode="HTML",
+        disable_web_preview=True,
+        send_events=["wall_lost"],
+        cooldown_seconds={},
+        instrument_by_symbol={},
+        include_instrument_button=False,
+        instrument_button_text="",
+        append_security_share_utm=False,
+        logger=logging.getLogger("test"),
+        start_worker=False,
+        send_func=lambda *_: asyncio.sleep(0),
+    )
+
+    notifier.notify(
+        _event(
+            event="wall_confirmed",
+            wall_key="uid-sber|BUY|120.5",
+            price=120.5,
+        )
+    )
+    notifier.notify(
+        _event(
+            event="wall_lost",
+            wall_key="uid-sber|BUY|120.5",
+            price=120.5,
+        )
+    )
+    notifier.notify(
+        _event(
+            event="wall_confirmed",
+            wall_key="uid-sber|BUY|121.0",
+            price=121.0,
+        )
+    )
+    notifier.notify(
+        _event(
+            event="wall_lost",
+            wall_key="uid-sber|BUY|121.0",
+            price=121.0,
+        )
+    )
+    assert notifier._queue.qsize() == 2
+
+    asyncio.run(notifier.aclose())
+
+
+def test_repeat_lost_is_suppressed_per_wall() -> None:
+    notifier = TelegramNotifier(
+        token="token",
+        chat_ids=[1],
+        parse_mode="HTML",
+        disable_web_preview=True,
+        send_events=["wall_lost"],
+        cooldown_seconds={},
+        instrument_by_symbol={},
+        include_instrument_button=False,
+        instrument_button_text="",
+        append_security_share_utm=False,
+        logger=logging.getLogger("test"),
+        start_worker=False,
+        send_func=lambda *_: asyncio.sleep(0),
+    )
+
+    notifier.notify(
+        _event(
+            event="wall_confirmed",
+            wall_key="uid-sber|BUY|120.5",
+            price=120.5,
+        )
+    )
+    notifier.notify(
+        _event(
+            event="wall_lost",
+            wall_key="uid-sber|BUY|120.5",
+            price=120.5,
+        )
+    )
+    notifier.notify(
+        _event(
+            event="wall_lost",
+            wall_key="uid-sber|BUY|120.5",
+            price=120.5,
+        )
+    )
+    assert notifier._queue.qsize() == 1
 
     asyncio.run(notifier.aclose())
 
